@@ -1,0 +1,21 @@
+{
+  "id": "/",
+  "name": "SnipTok - Shorts & Reels",
+  "short_name": "SnipTok",
+  "description": "Ultra-smooth TikTok and Instagram Reels style vertical video player with offline IndexedDB caching.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#09090b",
+  "theme_color": "#09090b",
+  "orientation": "portrait-primary",
+  "categories": ["entertainment", "video", "social"],
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
