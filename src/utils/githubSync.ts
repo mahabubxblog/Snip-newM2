@@ -229,14 +229,19 @@ export async function commitVideosListToGitHub(
     const fileContentStr = JSON.stringify(cleanVideos, null, 2);
     const contentBase64 = utf8ToBase64(fileContentStr);
 
-    const apiUrl = `https://api.github.com/repos/${encodeURIComponent(owner.trim())}/${encodeURIComponent(
-      repo.trim()
-    )}/contents/${filePath.trim()}`;
+    const cleanOwner = owner.trim();
+    const cleanRepo = repo.trim().replace(/\.git$/, '');
+    const cleanBranch = branch.trim() || 'main';
+    const cleanFilePath = filePath.trim().replace(/^\/+/, '');
+
+    const apiUrl = `https://api.github.com/repos/${encodeURIComponent(cleanOwner)}/${encodeURIComponent(
+      cleanRepo
+    )}/contents/${cleanFilePath}`;
 
     // Step 1: Check if file already exists to get its SHA
     let existingSha: string | undefined = undefined;
     try {
-      const getFileRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(branch.trim() || 'main')}`, {
+      const getFileRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(cleanBranch)}`, {
         headers: {
           Authorization: `Bearer ${token.trim()}`,
           Accept: 'application/vnd.github.v3+json',
@@ -260,7 +265,7 @@ export async function commitVideosListToGitHub(
     } = {
       message: `Update SnipTok videos feed (${cleanVideos.length} reels) via Admin Studio [skip ci]`,
       content: contentBase64,
-      branch: branch.trim() || 'main',
+      branch: cleanBranch,
     };
 
     if (existingSha) {
@@ -279,6 +284,35 @@ export async function commitVideosListToGitHub(
 
     if (!putRes.ok) {
       const errData = await putRes.json().catch(() => ({}));
+
+      if (putRes.status === 404) {
+        return {
+          success: false,
+          message: `GitHub Commit ব্যর্থ হয়েছে (404 Not Found): রিপোজিটরির নাম '${cleanOwner}/${cleanRepo}' পাওয়া যায়নি অথবা ব্রাঞ্চ '${cleanBranch}' বা টোকেনের 'repo' পারমিশন সঠিক নয়। অনুগ্রহ করে Repository Name এ আপনার আসল রিপোজিটরি নাম (যেমন: Snip-newM2) দিন এবং উপরে 'টোকেন ভেরিফাই করুন' বাটনে ক্লিক করে চেক করুন।`,
+        };
+      }
+
+      if (putRes.status === 409) {
+        return {
+          success: false,
+          message: `GitHub Commit কনফ্লিক্ট হয়েছে (409 Conflict): রিমোট ফাইলে নতুন কোনো আপডেট হয়েছে। অনুগ্রহ করে "GitHub থেকে লাইভ ডেটা আনুন (Pull)" বাটনে ক্লিক করে আবার চেষ্টা করুন।`,
+        };
+      }
+
+      if (putRes.status === 401) {
+        return {
+          success: false,
+          message: `GitHub টোকেন অবৈধ বা মেয়াদোত্তীর্ণ (401 Unauthorized)। অনুগ্রহ করে নতুন Classic Token তৈরি করে দিন।`,
+        };
+      }
+
+      if (putRes.status === 403) {
+        return {
+          success: false,
+          message: `GitHub পারমিশন ত্রুটি (403 Forbidden): টোকেনে 'repo' (Full control of private repositories) স্কোপ নেই অথবা API রেট লিমিট শেষ হয়েছে।`,
+        };
+      }
+
       return {
         success: false,
         message: `GitHub Commit ব্যর্থ হয়েছে (${putRes.status}): ${errData.message || putRes.statusText}`,

@@ -77,19 +77,46 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   } | null>(null);
   const [formMsg, setFormMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // GitHub Sync state
+  // GitHub Sync state with intelligent automatic repo detection
   const [githubConfig, setGithubConfig] = useState<GitHubSyncConfig>(() => {
+    let defaultOwner = 'mahabubxblog';
+    let defaultRepo = 'Snip-newM2';
+
+    // Auto-detect owner and repo name if running on GitHub Pages (e.g. mahabubxblog.github.io/Snip-newM2/)
+    if (typeof window !== 'undefined') {
+      const hostname = window.location.hostname;
+      if (hostname.includes('.github.io')) {
+        const detectedOwner = hostname.split('.')[0];
+        if (detectedOwner) defaultOwner = detectedOwner;
+        const segments = window.location.pathname.split('/').filter(Boolean);
+        if (segments.length > 0 && segments[0]) {
+          defaultRepo = segments[0];
+        }
+      }
+    }
+
     try {
       const saved = localStorage.getItem('sniptok_github_config');
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        // If repo was previously stuck on the default 'mahabubxblog.github.io', auto-correct to Snip-newM2
+        if (parsed.repo === 'mahabubxblog.github.io' && defaultRepo !== 'mahabubxblog.github.io') {
+          parsed.repo = defaultRepo;
+        }
+        return {
+          owner: parsed.owner || defaultOwner,
+          repo: parsed.repo || defaultRepo,
+          token: parsed.token || '',
+          branch: parsed.branch || 'main',
+          filePath: parsed.filePath || 'public/videos.json',
+        };
       }
     } catch {
       // ignore
     }
     return {
-      owner: 'mahabubxblog',
-      repo: 'mahabubxblog.github.io',
+      owner: defaultOwner,
+      repo: defaultRepo,
       token: '',
       branch: 'main',
       filePath: 'public/videos.json',
@@ -315,6 +342,9 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     try {
       const res = await verifyGitHubRepo(githubConfig);
       setGhVerifyResult(res);
+      if (res.success && res.defaultBranch && res.defaultBranch !== githubConfig.branch) {
+        setGithubConfig((prev) => ({ ...prev, branch: res.defaultBranch! }));
+      }
     } catch (err) {
       setGhVerifyResult({
         success: false,
