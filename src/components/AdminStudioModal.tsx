@@ -695,6 +695,11 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                     />
                   </div>
 
+                  <div className="mt-1.5 flex flex-wrap items-center justify-between text-[11px] text-zinc-400 gap-1">
+                    <span>💡 ড্রপবক্স টিপ: ফাইলে গিয়ে <strong>Share &gt; "Anyone with link can view"</strong> দিয়ে কপি করুন।</span>
+                    <span className="text-emerald-400 font-mono text-[10px]">Auto Session Cleaner Active</span>
+                  </div>
+
                   {/* URL Parser Feedback & Live Player Preview */}
                   {parsedPreview && (
                     <div className="mt-2 p-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-xs space-y-2">

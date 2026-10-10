@@ -7,13 +7,13 @@
  * 2. Modern Dropbox SCL:
  *    https://www.dropbox.com/scl/fi/.../video.mp4?rlkey=...&dl=0 -> ...&raw=1
  *    CRITICAL: Preserves 'www.dropbox.com' host! DO NOT change host to dl.dropboxusercontent.com for SCL links.
+ *    CRITICAL: Strips temporary session tokens (st, e) that expire upon page reload! Keeps permanent rlkey.
  * 3. Variant Dropbox Hosts:
  *    dropbox.com or dl.dropbox.com or dl.dropboxusercontent.com -> normalized to www.dropbox.com with raw=1
  * 4. Google Drive:
  *    https://drive.google.com/file/d/{id}/view -> https://drive.google.com/uc?export=download&id={id}
- *    https://drive.google.com/open?id={id} -> https://drive.google.com/uc?export=download&id={id}
- * 5. Direct Video Streams (.mp4, .webm, .m4v, .mov)
- * 6. Social Web Link Warnings (YouTube/Instagram/TikTok page links that require video file bytes)
+ * 5. Direct Video Streams (.mp4, .webm, .m4v, .mov, cdn URLs)
+ * 6. Alternative Fallback Generation for Auto-Recovery
  */
 
 export interface NormalizedUrlResult {
@@ -22,6 +22,7 @@ export interface NormalizedUrlResult {
   isValid: boolean;
   notes: string;
   originalUrl: string;
+  fallbackUrls?: string[];
 }
 
 export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
@@ -39,9 +40,9 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
 
   try {
     const parsed = new URL(trimmed);
+    const hostLower = parsed.hostname.toLowerCase();
 
     // 1. Check for unsupported social web pages (e.g. YouTube watch pages, Instagram post pages)
-    const hostLower = parsed.hostname.toLowerCase();
     if (
       hostLower.includes('youtube.com') ||
       hostLower.includes('youtu.be') ||
@@ -68,8 +69,44 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
       parsed.searchParams.delete('dl');
 
       const isScl = parsed.pathname.includes('/scl/fi/');
+
+      // CRITICAL BUG FIX FOR DROPBOX EXPIRATION:
+      // When users copy links from Dropbox mobile/web while logged in, Dropbox often appends:
+      // &st=xyz (session token) and &e=1 (ephemeral).
+      // These temporary tokens expire in a few minutes, causing "video format or CORS not supported" upon page refresh!
+      // By removing 'st' and 'e' and keeping 'rlkey', Dropbox resolves the link permanently!
+      if (isScl) {
+        parsed.searchParams.delete('st');
+        parsed.searchParams.delete('e');
+      }
+
+      // Generate fallback URLs for resilient multi-try playback
+      const fallbackUrls: string[] = [];
+
+      // Fallback 1: Force dl=1 (direct file stream)
+      try {
+        const dl1Url = new URL(parsed.toString());
+        dl1Url.searchParams.set('dl', '1');
+        dl1Url.searchParams.delete('raw');
+        fallbackUrls.push(dl1Url.toString());
+      } catch {
+        // ignore
+      }
+
+      // Fallback 2: For standard /s/ links, dl.dropboxusercontent.com
+      if (parsed.pathname.startsWith('/s/')) {
+        try {
+          const directDl = new URL(parsed.toString());
+          directDl.hostname = 'dl.dropboxusercontent.com';
+          directDl.search = '';
+          fallbackUrls.push(directDl.toString());
+        } catch {
+          // ignore
+        }
+      }
+
       const notes = isScl
-        ? 'Dropbox SCL লিঙ্ক সফলভাবে raw=1 সরাসরি স্ট্রিমে রূপান্তর করা হয়েছে (CORS সাপোর্টেড)'
+        ? 'Dropbox SCL লিঙ্ক সফলভাবে স্থায়ী raw=1 স্ট্রিমে রূপান্তর করা হয়েছে (মেয়াদোত্তীর্ণ টোকেন ক্লিনড)'
         : 'Dropbox লিঙ্ক সফলভাবে raw=1 সরাসরি স্ট্রিমে রূপান্তর করা হয়েছে';
 
       return {
@@ -78,12 +115,12 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
         isValid: true,
         notes,
         originalUrl: trimmed,
+        fallbackUrls,
       };
     }
 
     // 3. GOOGLE DRIVE NORMALIZATION
     if (hostLower.includes('drive.google.com')) {
-      // Pattern 1: /file/d/{fileId}/view
       const matchFileId = trimmed.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
       if (matchFileId && matchFileId[1]) {
         const fileId = matchFileId[1];
@@ -93,10 +130,10 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
           isValid: true,
           notes: `Google Drive ফাইল আইডি (${fileId}) সরাসরি ডাউনলোড স্ট্রিমে রূপান্তর করা হয়েছে`,
           originalUrl: trimmed,
+          fallbackUrls: [`https://docs.google.com/uc?export=download&id=${fileId}`],
         };
       }
 
-      // Pattern 2: ?id={fileId}
       const queryId = parsed.searchParams.get('id');
       if (queryId) {
         return {
@@ -105,6 +142,7 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
           isValid: true,
           notes: 'Google Drive সরাসরি ডাউনলোড লিংক হিসেবে প্রস্তুত করা হয়েছে',
           originalUrl: trimmed,
+          fallbackUrls: [`https://docs.google.com/uc?export=download&id=${queryId}`],
         };
       }
     }
@@ -157,6 +195,49 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
     notes: 'URL বিশ্লেষণ করা সম্ভব হয়নি',
     originalUrl: trimmed,
   };
+}
+
+/**
+ * Generate candidate fallback URLs for auto-reloading if a stream fails
+ */
+export function getAlternativeVideoUrls(url: string): string[] {
+  const result: string[] = [url];
+  try {
+    const parsed = new URL(url);
+    const hostLower = parsed.hostname.toLowerCase();
+
+    if (hostLower.includes('dropbox.com') || hostLower.includes('dropboxusercontent.com')) {
+      // 1. Try raw=1 with cleaned session tokens
+      const u1 = new URL(url);
+      u1.hostname = 'www.dropbox.com';
+      u1.searchParams.set('raw', '1');
+      u1.searchParams.delete('dl');
+      u1.searchParams.delete('st');
+      u1.searchParams.delete('e');
+      if (u1.toString() !== url) result.push(u1.toString());
+
+      // 2. Try dl=1
+      const u2 = new URL(url);
+      u2.hostname = 'www.dropbox.com';
+      u2.searchParams.set('dl', '1');
+      u2.searchParams.delete('raw');
+      u2.searchParams.delete('st');
+      u2.searchParams.delete('e');
+      result.push(u2.toString());
+
+      // 3. For legacy /s/ links
+      if (parsed.pathname.startsWith('/s/')) {
+        const u3 = new URL(url);
+        u3.hostname = 'dl.dropboxusercontent.com';
+        u3.search = '';
+        result.push(u3.toString());
+      }
+    }
+  } catch {
+    // ignore
+  }
+
+  return Array.from(new Set(result));
 }
 
 /**

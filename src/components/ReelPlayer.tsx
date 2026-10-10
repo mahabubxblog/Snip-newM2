@@ -1,4 +1,4 @@
-import React, { useRef, useState, useEffect, useCallback } from 'react';
+import React, { useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Heart,
   MessageCircle,
@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import confetti from 'canvas-confetti';
 import { VideoItem } from '../types';
+import { getAlternativeVideoUrls } from '../utils/urlParser';
 
 interface ReelPlayerProps {
   video: VideoItem;
@@ -60,6 +61,22 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState<boolean>(false);
   const [isBuffering, setIsBuffering] = useState<boolean>(true);
   const [videoError, setVideoError] = useState<string | null>(null);
+
+  // Multi-fallback candidate streaming URLs (raw=1, dl=1, direct)
+  const candidateUrls = useMemo(() => {
+    if (video.objectUrl) return [video.objectUrl];
+    return getAlternativeVideoUrls(video.url);
+  }, [video.objectUrl, video.url]);
+
+  const [currentUrlIndex, setCurrentUrlIndex] = useState<number>(0);
+
+  // Reset candidate index when video ID or main URL changes
+  useEffect(() => {
+    setCurrentUrlIndex(0);
+    setVideoError(null);
+  }, [video.id, video.url]);
+
+  const activeSourceUrl = candidateUrls[currentUrlIndex] || video.objectUrl || video.url;
 
   const [isLiked, setIsLiked] = useState<boolean>(() => {
     try {
@@ -175,20 +192,28 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
   };
   const handleCanPlay = () => setIsBuffering(false);
 
-  // Video Error Handler with detailed Bengali diagnosis
+  // Video Error Handler with automatic fallback cycling and detailed diagnosis
   const handleVideoError = () => {
     const el = videoRef.current;
     setIsBuffering(false);
     setIsPlaying(false);
 
+    // If another candidate URL exists (e.g. dl=1 instead of raw=1 or direct), try it automatically!
+    if (currentUrlIndex + 1 < candidateUrls.length) {
+      console.log(`Primary URL failed, auto-trying fallback ${currentUrlIndex + 1}/${candidateUrls.length}`);
+      setCurrentUrlIndex((prev) => prev + 1);
+      setIsBuffering(true);
+      return;
+    }
+
     let errorDetail = 'ভিডিওটি লোড করা যাচ্ছে না।';
     if (el?.error) {
       switch (el.error.code) {
         case MediaError.MEDIA_ERR_NETWORK:
-          errorDetail = 'নেটওয়ার্ক সংযোগ ত্রুটি। ইন্টারনেট চেক করুন।';
+          errorDetail = 'নেটওয়ার্ক সংযোগ ত্রুটি। ইন্টারনেট বা ড্রপবক্স ব্যান্ডউইথ চেক করুন।';
           break;
         case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          errorDetail = 'ভিডিও ফরম্যাট বা CORS স্ট্রিম সাপোর্ট করছে না। লিঙ্কটি পরীক্ষা করুন।';
+          errorDetail = 'ভিডিও ফরম্যাট বা CORS স্ট্রিম সাপোর্ট করছে না। ড্রপবক্স লিংকটি "Anyone with link can view" শেয়ার করা কিনা এবং Brave Shields চেক করুন।';
           break;
         case MediaError.MEDIA_ERR_DECODE:
           errorDetail = 'ভিডিও ডিকোড ত্রুটি হয়েছে।';
@@ -207,6 +232,8 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
     if (el) {
       setVideoError(null);
       setIsBuffering(true);
+      // Reset back to primary candidate or next
+      setCurrentUrlIndex(0);
       el.load();
       attemptPlayback(el, isMuted);
     }
@@ -344,8 +371,8 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
     }
   };
 
-  // Video source preference: Object URL (cached blob) or network URL
-  const videoSource = video.objectUrl || video.url;
+  // Video source preference: Object URL (cached blob) or network active candidate
+  const videoSource = activeSourceUrl;
 
   return (
     <div
@@ -360,7 +387,7 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
         loop
         playsInline
         webkit-playsinline="true"
-        preload="auto"
+        preload={isActive ? 'auto' : 'none'}
         onTimeUpdate={handleTimeUpdate}
         onWaiting={handleWaiting}
         onPlaying={handlePlaying}
@@ -380,7 +407,7 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
       {/* Video Error Overlay */}
       {videoError && isActive && (
         <div
-          className="absolute inset-0 z-30 bg-black/85 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center text-zinc-200"
+          className="absolute inset-0 z-30 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center text-zinc-200"
           onClick={(e) => e.stopPropagation()}
         >
           <div className="p-3 bg-red-500/10 text-red-400 rounded-2xl border border-red-500/20 mb-3">
@@ -389,13 +416,39 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
           <h3 className="text-base font-bold text-white mb-1">ভিডিও প্লে করতে ব্যর্থ</h3>
           <p className="text-xs text-zinc-400 max-w-xs mb-4 leading-relaxed">{videoError}</p>
 
-          <button
-            onClick={handleRetryLoad}
-            className="flex items-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-rose-600/30 transition cursor-pointer active:scale-95"
-          >
-            <RotateCcw className="w-4 h-4" />
-            আবার চেষ্টা করুন (Retry)
-          </button>
+          <div className="flex flex-col sm:flex-row items-center gap-2 w-full max-w-xs">
+            <button
+              onClick={handleRetryLoad}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-rose-600/30 transition cursor-pointer active:scale-95 min-h-[42px]"
+            >
+              <RotateCcw className="w-4 h-4" />
+              আবার চেষ্টা করুন (Retry)
+            </button>
+
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onDownload(video);
+              }}
+              disabled={isDownloading || isDownloaded}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 transition cursor-pointer active:scale-95 min-h-[42px]"
+            >
+              <Download className="w-4 h-4 text-rose-400" />
+              {isDownloaded ? 'সংরক্ষিত আছে' : isDownloading ? `ডাউনলোড হচ্ছে (${downloadProgress}%)` : 'অফলাইনে সেভ করুন'}
+            </button>
+          </div>
+
+          <div className="mt-4 p-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-[11px] text-zinc-400 text-left space-y-1.5 max-w-xs w-full">
+            <p className="font-semibold text-zinc-200 flex items-center gap-1">
+              <span>💡 দ্রুত সমাধান টিপস:</span>
+            </p>
+            <p className="text-zinc-400 leading-normal">
+              ১. <strong>Dropbox লিংক:</strong> ড্রপবক্স ফাইলে গিয়ে <em>Share &gt; "Anyone with link can view"</em> নিশ্চিত করে লিংক কপি করুন।
+            </p>
+            <p className="text-zinc-400 leading-normal">
+              ২. <strong>Brave ব্রাউজার:</strong> উপরে সিংহ আইকনে ট্যাপ করে <em>Brave Shields সাময়িক বন্ধ</em> করে সাইটটি রিফ্রেশ দিন।
+            </p>
+          </div>
         </div>
       )}
 
