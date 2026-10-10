@@ -989,6 +989,46 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   </div>
                 )}
 
+                {/* GitHub Pages Setup & Troubleshooting Guide */}
+                <div className="p-4 rounded-xl bg-zinc-950/80 border border-rose-500/30 space-y-3">
+                  <div className="flex items-center gap-2 text-rose-400 font-bold text-xs">
+                    <AlertCircle className="w-4 h-4 shrink-0" />
+                    <span>GitHub Pages এ হোস্ট করতে সমস্যা হচ্ছে? সমাধান দেখে নিন:</span>
+                  </div>
+
+                  <div className="space-y-2.5 text-xs text-zinc-300">
+                    <div className="flex items-start gap-2 bg-zinc-900/80 p-2.5 rounded-lg border border-zinc-800">
+                      <span className="w-5 h-5 rounded-full bg-rose-600/30 text-rose-400 font-bold flex items-center justify-center shrink-0 text-[11px]">১</span>
+                      <div>
+                        <strong className="text-white">GitHub Pages Source সেটিং "GitHub Actions" করুন:</strong>
+                        <p className="text-zinc-400 mt-0.5">
+                          আপনার রিপোজিটরির <strong>Settings</strong> &rarr; বামপাশের মেনু থেকে <strong>Pages</strong> এ যান। <strong>Build and deployment</strong> এর নিচে <strong>Source</strong> অপশনে <strong>"Deploy from a branch"</strong> এর বদলে <strong>"GitHub Actions"</strong> সিলেক্ট করুন।
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-zinc-900/80 p-2.5 rounded-lg border border-zinc-800">
+                      <span className="w-5 h-5 rounded-full bg-rose-600/30 text-rose-400 font-bold flex items-center justify-center shrink-0 text-[11px]">২</span>
+                      <div>
+                        <strong className="text-white">অপ্রয়োজনীয় static.yml মুছে ফেলুন:</strong>
+                        <p className="text-zinc-400 mt-0.5">
+                          GitHub এর স্বয়ংক্রিয়ভাবে তৈরি হওয়া <code className="text-zinc-200 bg-zinc-800 px-1 rounded">.github/workflows/static.yml</code> ফাইলটি মুছে ফেলুন (Delete)। আমাদের অ্যাপে ইতিমধ্যেই পরিপূর্ণ <code className="text-zinc-200 bg-zinc-800 px-1 rounded">.github/workflows/deploy.yml</code> কনফিগার করা আছে যা Vite দিয়ে প্রোডাকশন বিল্ড করে।
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="flex items-start gap-2 bg-zinc-900/80 p-2.5 rounded-lg border border-zinc-800">
+                      <span className="w-5 h-5 rounded-full bg-rose-600/30 text-rose-400 font-bold flex items-center justify-center shrink-0 text-[11px]">৩</span>
+                      <div>
+                        <strong className="text-white">নতুন কোড এবং package-lock.json পুশ করুন:</strong>
+                        <p className="text-zinc-400 mt-0.5">
+                          আমরা বিল্ড ফিক্স ও <code className="text-zinc-200 bg-zinc-800 px-1 rounded">package-lock.json</code> জেনারেট করে দিয়েছি। কোড রিপোজিটরির <code className="text-zinc-200 bg-zinc-800 px-1 rounded">main</code> ব্রাঞ্চে পুশ করলে স্বয়ংক্রিয়ভাবে ১০০% সফলভাবে বিল্ড ও হোস্ট হয়ে যাবে!
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* Backup & Tools Section */}
                 <div className="pt-4 border-t border-zinc-800">
                   <h4 className="text-xs font-bold text-zinc-300 uppercase tracking-wider mb-2.5">
