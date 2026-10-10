@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   X,
   Lock,
@@ -11,6 +11,7 @@ import {
   Edit3,
   ExternalLink,
   CheckCircle,
+  CheckCircle2,
   AlertCircle,
   Copy,
   Download,
@@ -20,6 +21,13 @@ import {
   ArrowUp,
   ArrowDown,
   CloudDownload,
+  BookOpen,
+  Check,
+  Video,
+  Layers,
+  HelpCircle,
+  Zap,
+  ShieldCheck,
 } from 'lucide-react';
 import { GitHubSyncConfig, VideoItem } from '../types';
 import { normalizeVideoUrl } from '../utils/urlParser';
@@ -55,8 +63,17 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // Active tab: 'list' | 'edit' | 'github'
-  const [activeTab, setActiveTab] = useState<'list' | 'edit' | 'github'>('list');
+  // Active tab: 'list' | 'edit' | 'bulk' | 'github' | 'guide'
+  const [activeTab, setActiveTab] = useState<'list' | 'edit' | 'bulk' | 'github' | 'guide'>('list');
+
+  // Bulk import state
+  const [bulkUrlsText, setBulkUrlsText] = useState('');
+  const [bulkCreatorName, setBulkCreatorName] = useState('মাহাবুব আহমেদ');
+  const [bulkCreatorHandle, setBulkCreatorHandle] = useState('@mahabub_creator');
+  const [bulkCaption, setBulkCaption] = useState('#shorts #viral #bangla');
+  const [bulkAudioTrack, setBulkAudioTrack] = useState('Original Sound - SnipTok Beats');
+  const [bulkImportMsg, setBulkImportMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [isImportingBulk, setIsImportingBulk] = useState(false);
 
   // Video Form state
   const [editingVideoId, setEditingVideoId] = useState<string | null>(null);
@@ -135,6 +152,16 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   const [isPullingGh, setIsPullingGh] = useState(false);
   const [copiedJson, setCopiedJson] = useState(false);
 
+  // Hosting Guide Helper State
+  const [guideTestUrl, setGuideTestUrl] = useState('');
+  const [guideParsedResult, setGuideParsedResult] = useState<{
+    directUrl: string;
+    provider: string;
+    isValid: boolean;
+    notes: string;
+  } | null>(null);
+  const [copiedReleaseTemplate, setCopiedReleaseTemplate] = useState(false);
+
   // Close on Escape key press
   useEffect(() => {
     if (!isOpen) return;
@@ -165,6 +192,16 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       setParsedPreview(null);
     }
   }, [formData.url]);
+
+  // Handle Guide URL test change
+  useEffect(() => {
+    if (guideTestUrl.trim()) {
+      const res = normalizeVideoUrl(guideTestUrl);
+      setGuideParsedResult(res);
+    } else {
+      setGuideParsedResult(null);
+    }
+  }, [guideTestUrl]);
 
   // Handle Admin Login
   const handleLogin = (e: React.FormEvent) => {
@@ -335,6 +372,104 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     }
   };
 
+  // Memoized bulk URL parsing
+  const bulkParsedEntries = useMemo(() => {
+    if (!bulkUrlsText.trim()) return [];
+    const lines = bulkUrlsText
+      .split(/[\r\n]+/)
+      .map((l) => l.trim())
+      .filter((l) => l.length > 5 && (l.startsWith('http://') || l.startsWith('https://') || l.startsWith('/')));
+
+    return lines.map((line, idx) => {
+      const parsed = normalizeVideoUrl(line);
+      let derivedTitle = `ভিডিও #${videos.length + idx + 1}`;
+      try {
+        const urlObj = new URL(line.startsWith('/') ? `https://dummy.com${line}` : line);
+        const segments = urlObj.pathname.split('/').filter(Boolean);
+        const lastSegment = segments[segments.length - 1] || '';
+        const cleanName = decodeURIComponent(lastSegment)
+          .replace(/\.[a-z0-9]+$/i, '')
+          .replace(/[-_]+/g, ' ')
+          .trim();
+        if (cleanName) {
+          derivedTitle = cleanName.charAt(0).toUpperCase() + cleanName.slice(1);
+        }
+      } catch {
+        // use fallback
+      }
+      return {
+        originalUrl: line,
+        parsed,
+        title: derivedTitle,
+      };
+    });
+  }, [bulkUrlsText, videos.length]);
+
+  // Bulk Import Handler
+  const handleBulkImport = async () => {
+    if (bulkParsedEntries.length === 0) {
+      setBulkImportMsg({ type: 'error', text: 'অন্তত একটি ভিডিও লিংক প্রবেশ করান।' });
+      return;
+    }
+    const validEntries = bulkParsedEntries.filter((e) => e.parsed.isValid);
+    if (validEntries.length === 0) {
+      setBulkImportMsg({ type: 'error', text: 'কোনো বৈধ ভিডিও লিংক পাওয়া যায়নি।' });
+      return;
+    }
+
+    const availableSlots = 100 - videos.length;
+    if (availableSlots <= 0) {
+      setBulkImportMsg({ type: 'error', text: 'সর্বোচ্চ ১০০ টি ভিডিও স্লট ইতিমধ্যে পূর্ণ!' });
+      return;
+    }
+
+    const entriesToAdd = validEntries.slice(0, availableSlots);
+    setIsImportingBulk(true);
+
+    try {
+      const newVideos: VideoItem[] = entriesToAdd.map((entry, index) => ({
+        id: 'snip-' + Date.now().toString(36) + '-' + index + '-' + Math.random().toString(36).substring(2, 6),
+        title: entry.title,
+        caption: bulkCaption.trim() || '#shorts #viral #bangla',
+        url: entry.parsed.directUrl,
+        originalUrl: entry.originalUrl,
+        creator: bulkCreatorName.trim() || 'মাহাবুব আহমেদ',
+        creatorHandle: bulkCreatorHandle.trim() || '@mahabub_creator',
+        creatorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+        audioTrack: bulkAudioTrack.trim() || 'Original Sound - SnipTok Beats',
+        likes: Math.floor(Math.random() * 250) + 15,
+        commentsCount: Math.floor(Math.random() * 20),
+        createdAt: new Date().toISOString(),
+        isLocalCustom: true,
+      }));
+
+      const updatedList = [...newVideos, ...videos];
+      await onSaveVideos(updatedList, `${newVideos.length} টি নতুন ভিডিও সফলভাবে যুক্ত হয়েছে!`);
+
+      if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
+        triggerGitHubSync(updatedList);
+      }
+
+      setBulkImportMsg({
+        type: 'success',
+        text: `অভিনন্দন! ${newVideos.length} টি নতুন ভিডিও ফিডে যুক্ত হয়েছে।`,
+      });
+      setBulkUrlsText('');
+
+      setTimeout(() => {
+        setActiveTab('list');
+        setBulkImportMsg(null);
+      }, 1400);
+    } catch (err) {
+      setBulkImportMsg({
+        type: 'error',
+        text: 'ভিডিও যোগ করার সময় সমস্যা হয়েছে: ' + String(err),
+      });
+    } finally {
+      setIsImportingBulk(false);
+    }
+  };
+
   // GitHub token verification
   const handleVerifyGitHub = async () => {
     setIsVerifyingGh(true);
@@ -428,6 +563,22 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       }
     };
     reader.readAsText(file);
+  };
+
+  // Quick Action from Guide: Apply tested URL to new video form
+  const handleApplyGuideUrlToNew = () => {
+    if (!guideParsedResult?.isValid) return;
+    setEditingVideoId(null);
+    setFormData({
+      title: 'নতুন রিল ভিডিও 🔥',
+      caption: '#shorts #viral #reels #sniptok',
+      url: guideParsedResult.directUrl,
+      creator: 'মাহাবুব আহমেদ',
+      creatorHandle: '@mahabub_creator',
+      creatorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+      audioTrack: 'Original Sound - SnipTok Exclusive',
+    });
+    setActiveTab('edit');
   };
 
   if (!isOpen) return null;
@@ -527,7 +678,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   setActiveTab('list');
                   setEditingVideoId(null);
                 }}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] ${
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
                   activeTab === 'list'
                     ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -539,19 +690,49 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
 
               <button
                 onClick={startAddNew}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] ${
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
                   activeTab === 'edit'
                     ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200'
                 }`}
               >
                 <PlusCircle className="w-4 h-4" />
-                {editingVideoId ? 'ভিডিও এডিট' : '+ নতুন ভিডিও যোগ'}
+                {editingVideoId ? 'ভিডিও এডিট' : '+ একক ভিডিও'}
+              </button>
+
+              <button
+                onClick={() => {
+                  setActiveTab('bulk');
+                  setBulkImportMsg(null);
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
+                  activeTab === 'bulk'
+                    ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
+                    : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Layers className="w-4 h-4 text-amber-400" />
+                ⚡ একসাথে অনেকগুলো যোগ (Bulk)
+              </button>
+
+              <button
+                onClick={() => setActiveTab('guide')}
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
+                  activeTab === 'guide'
+                    ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
+                    : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <BookOpen className="w-4 h-4 text-rose-400" />
+                ফ্রি ভিডিও হোস্টিং গাইড ও টুলস
+                <span className="text-[9px] px-1.5 py-0.2 bg-rose-500/20 text-rose-300 rounded font-semibold">
+                  ১০০% FREE
+                </span>
               </button>
 
               <button
                 onClick={() => setActiveTab('github')}
-                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] ${
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
                   activeTab === 'github'
                     ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200'
@@ -681,13 +862,13 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                 {/* Video URL Input */}
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center justify-between">
-                    <span>ভিডিও লিংক (Dropbox Share Link / Direct MP4 URL / Google Drive) *</span>
+                    <span>ভিডিও লিংক (GitHub Releases / Cloudinary / Dropbox / MP4 URL) *</span>
                     <span className="text-rose-400 font-mono text-[11px]">Auto CORS Normalization</span>
                   </label>
                   <div className="relative">
                     <input
                       type="url"
-                      placeholder="https://www.dropbox.com/scl/fi/.../video.mp4?rlkey=...&dl=0"
+                      placeholder="https://github.com/mahabubxblog/Snip-newM2/releases/download/.../video.mp4"
                       value={formData.url}
                       onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                       className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-700 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-rose-500 font-mono min-h-[44px]"
@@ -696,8 +877,14 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   </div>
 
                   <div className="mt-1.5 flex flex-wrap items-center justify-between text-[11px] text-zinc-400 gap-1">
-                    <span>💡 ড্রপবক্স টিপ: ফাইলে গিয়ে <strong>Share &gt; "Anyone with link can view"</strong> দিয়ে কপি করুন।</span>
-                    <span className="text-emerald-400 font-mono text-[10px]">Auto Session Cleaner Active</span>
+                    <span>💡 সেরা পদ্ধতি: <strong>GitHub Releases</strong> এ আপলোড করে লিংক দিন (১০০% ফ্রি, বাফারিং-মুক্ত)।</span>
+                    <button
+                      type="button"
+                      onClick={() => setActiveTab('guide')}
+                      className="text-rose-400 underline font-medium cursor-pointer"
+                    >
+                      গাইড ও সাহায্যকারী দেখুন &rarr;
+                    </button>
                   </div>
 
                   {/* URL Parser Feedback & Live Player Preview */}
@@ -861,7 +1048,470 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
               </form>
             )}
 
-            {/* TAB 3: GITHUB LIVE SYNC */}
+            {/* TAB: BULK VIDEO IMPORT */}
+            {activeTab === 'bulk' && (
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 no-scrollbar">
+                {/* Header Banner */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-amber-950/40 via-zinc-900 to-zinc-900 border border-amber-500/30 space-y-2">
+                  <div className="flex items-center gap-2 text-amber-400 font-bold text-sm">
+                    <Layers className="w-5 h-5 text-amber-400 shrink-0" />
+                    <span>একসাথে একাধিক ভিডিও যোগ করুন (Bulk Video Importer)</span>
+                  </div>
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    GitHub Releases বা অন্য যেকোনো হোস্ট থেকে আপলোড করা ভিডিওগুলোর লিংক নিচে পেস্ট করুন (প্রতি লাইনে একটি করে লিংক)। সিস্টেম স্বয়ংক্রিয়ভাবে ভিডিও নাম ও লিংক পরীক্ষা করে এক ক্লিকে ফিডে যুক্ত করে দেবে!
+                  </p>
+                </div>
+
+                {/* Bulk Status Message */}
+                {bulkImportMsg && (
+                  <div
+                    className={`p-3.5 rounded-xl text-xs flex items-center gap-2 ${
+                      bulkImportMsg.type === 'success'
+                        ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-800'
+                        : 'bg-rose-950/80 text-rose-300 border border-rose-800'
+                    }`}
+                  >
+                    {bulkImportMsg.type === 'success' ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                    )}
+                    <span>{bulkImportMsg.text}</span>
+                  </div>
+                )}
+
+                {/* Batch Settings */}
+                <div className="p-4 rounded-xl bg-zinc-950/80 border border-zinc-800 space-y-3">
+                  <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-amber-400" />
+                    <span>ব্যাচের সাধারণ তথ্য (Default Meta for this Batch)</span>
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                    <div>
+                      <label className="block text-zinc-400 mb-1">ক্রিয়েটরের নাম</label>
+                      <input
+                        type="text"
+                        value={bulkCreatorName}
+                        onChange={(e) => setBulkCreatorName(e.target.value)}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-xs text-zinc-100 focus:outline-none focus:border-amber-500 min-h-[38px]"
+                        placeholder="মাহাবুব আহমেদ"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-zinc-400 mb-1">হ্যান্ডেল / ইউজারনেম</label>
+                      <input
+                        type="text"
+                        value={bulkCreatorHandle}
+                        onChange={(e) => setBulkCreatorHandle(e.target.value)}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-xs text-zinc-100 focus:outline-none focus:border-amber-500 min-h-[38px]"
+                        placeholder="@mahabub_creator"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-zinc-400 mb-1">ক্যাপশন / হ্যাশট্যাগ</label>
+                      <input
+                        type="text"
+                        value={bulkCaption}
+                        onChange={(e) => setBulkCaption(e.target.value)}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-xs text-zinc-100 focus:outline-none focus:border-amber-500 min-h-[38px]"
+                        placeholder="#shorts #viral #bangla"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-zinc-400 mb-1">অডিও ট্র্যাক</label>
+                      <input
+                        type="text"
+                        value={bulkAudioTrack}
+                        onChange={(e) => setBulkAudioTrack(e.target.value)}
+                        className="w-full px-3 py-2 bg-zinc-900 border border-zinc-700 rounded-lg text-xs text-zinc-100 focus:outline-none focus:border-amber-500 min-h-[38px]"
+                        placeholder="Original Sound - SnipTok Beats"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* URLs Input Area */}
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
+                      <span>ভিডিও লিংকসমূহ পেস্ট করুন (প্রতি লাইনে ১টি লিংক):</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkUrlsText(
+                          `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4`
+                        );
+                      }}
+                      className="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                    >
+                      নমুনা লিংক দিয়ে দেখুন
+                    </button>
+                  </div>
+
+                  <textarea
+                    rows={6}
+                    value={bulkUrlsText}
+                    onChange={(e) => setBulkUrlsText(e.target.value)}
+                    placeholder={`https://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-01.mp4\nhttps://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-02.mp4\nhttps://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-03.mp4`}
+                    className="w-full p-3 bg-zinc-950 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-600 font-mono focus:outline-none focus:border-amber-500 leading-relaxed"
+                  />
+                </div>
+
+                {/* Detected Links Preview */}
+                {bulkParsedEntries.length > 0 && (
+                  <div className="space-y-2 p-3 bg-zinc-950 rounded-xl border border-zinc-800">
+                    <div className="flex items-center justify-between text-xs pb-1 border-b border-zinc-800">
+                      <span className="font-semibold text-white">
+                        সনাক্তকৃত ভিডিও ({bulkParsedEntries.filter((e) => e.parsed.isValid).length}/{bulkParsedEntries.length})
+                      </span>
+                      <span className="text-[11px] text-zinc-400">
+                        স্লট বাকি: {100 - videos.length} টি
+                      </span>
+                    </div>
+
+                    <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1 no-scrollbar text-xs">
+                      {bulkParsedEntries.map((entry, idx) => (
+                        <div
+                          key={idx}
+                          className="flex items-center justify-between p-2 rounded-lg bg-zinc-900 border border-zinc-800/80 gap-2"
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="w-5 h-5 rounded bg-zinc-800 text-zinc-300 text-[10px] font-bold flex items-center justify-center shrink-0">
+                              {idx + 1}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="font-medium text-zinc-200 truncate">{entry.title}</p>
+                              <p className="text-[10px] text-zinc-500 truncate font-mono">
+                                {entry.originalUrl}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="shrink-0 flex items-center gap-1.5">
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-300">
+                              {entry.parsed.provider}
+                            </span>
+                            {entry.parsed.isValid ? (
+                              <span className="text-emerald-400 font-bold text-[11px]">✓ প্রস্তুত</span>
+                            ) : (
+                              <span className="text-red-400 text-[10px]">✕ ত্রুটিপূর্ণ</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Submit Action */}
+                <div className="flex items-center justify-between pt-2 border-t border-zinc-800">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkUrlsText('');
+                      setActiveTab('list');
+                    }}
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl text-xs font-medium cursor-pointer min-h-[40px]"
+                  >
+                    ফিরে যান
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isImportingBulk || bulkParsedEntries.filter((e) => e.parsed.isValid).length === 0}
+                    onClick={handleBulkImport}
+                    className="px-6 py-2.5 bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-amber-600/20 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 min-h-[40px]"
+                  >
+                    {isImportingBulk ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        যুক্ত হচ্ছে...
+                      </>
+                    ) : (
+                      <>
+                        <Layers className="w-4 h-4" />
+                        সবগুলো ভিডিও একসাথে যোগ করুন ({bulkParsedEntries.filter((e) => e.parsed.isValid).length} টি)
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 3: FREE HOSTING GUIDE & TOOLS */}
+            {activeTab === 'guide' && (
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6 no-scrollbar">
+                {/* Header Highlight Banner */}
+                <div className="p-4 rounded-2xl bg-gradient-to-r from-rose-950/40 via-zinc-900 to-zinc-900 border border-rose-500/30 space-y-2">
+                  <div className="flex items-center gap-2 text-rose-400 font-bold text-sm">
+                    <Zap className="w-5 h-5 text-rose-400 shrink-0" />
+                    <span>১০০% সম্পূর্ণ ফ্রি ভিডিও হোস্টিং সমাধান (Free Video Hosting Guide)</span>
+                  </div>
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    ড্রপবক্সের ফ্রি লিংকে কয়েক মিনিট পর পর মেয়াদ ফুরিয়ে যাওয়ার সমস্যা বা রিফ্রেশ দিলে ব্রাউজারে বাফারিং আটকে যাওয়ার সমস্যার <strong>১০০% ফ্রি স্থায়ী সমাধান</strong> নিচে বিস্তারিত দেওয়া হলো। এর জন্য কোনো Student Pack, ক্রেডিট কার্ড বা পেইড সাবস্ক্রিপশন লাগবে না!
+                  </p>
+                </div>
+
+                {/* Interactive Link Tester & Direct Slot Adder */}
+                <div className="p-4 rounded-xl bg-zinc-950 border border-zinc-800 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-bold text-white flex items-center gap-1.5">
+                      <Sparkles className="w-4 h-4 text-rose-400" />
+                      <span>ভিডিও লিংক টেস্টার ও রূপান্তরকারী (Test Any URL Live)</span>
+                    </h4>
+                    <span className="text-[10px] text-zinc-400 font-mono">Instant CORS Checker</span>
+                  </div>
+
+                  <div className="space-y-2">
+                    <input
+                      type="url"
+                      placeholder="এখানে যেকোনো GitHub Release / Cloudinary / Dropbox লিংক পেস্ট করুন..."
+                      value={guideTestUrl}
+                      onChange={(e) => setGuideTestUrl(e.target.value)}
+                      className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-rose-500 font-mono min-h-[42px]"
+                    />
+
+                    {/* Pre-filled Sample Buttons */}
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <span className="text-[11px] text-zinc-400">নমুনা লিংক টেস্ট করুন:</span>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setGuideTestUrl(
+                            'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4'
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-mono cursor-pointer"
+                      >
+                        Sample Direct MP4
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setGuideTestUrl(
+                            `https://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/sample.mp4`
+                          )
+                        }
+                        className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-[10px] font-mono cursor-pointer"
+                      >
+                        GitHub Release Template
+                      </button>
+                    </div>
+
+                    {/* Live Test Feedback & Mini Player */}
+                    {guideParsedResult && (
+                      <div className="mt-3 p-3.5 rounded-xl bg-zinc-900/90 border border-zinc-700 text-xs space-y-2.5">
+                        <div className="flex items-center justify-between">
+                          <span className="font-semibold text-emerald-400 flex items-center gap-1.5">
+                            <CheckCircle2 className="w-4 h-4" />
+                            {guideParsedResult.notes}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-zinc-800 text-zinc-200 font-mono text-[10px]">
+                            {guideParsedResult.provider.toUpperCase()}
+                          </span>
+                        </div>
+
+                        <div className="p-2 bg-black/60 rounded-lg text-zinc-300 font-mono text-[11px] break-all border border-zinc-800">
+                          {guideParsedResult.directUrl}
+                        </div>
+
+                        {guideParsedResult.isValid && (
+                          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 pt-1">
+                            <div className="w-36 h-48 bg-black rounded-lg overflow-hidden border border-zinc-700">
+                              <video
+                                src={guideParsedResult.directUrl}
+                                controls
+                                playsInline
+                                className="w-full h-full object-cover"
+                              />
+                            </div>
+                            <button
+                              type="button"
+                              onClick={handleApplyGuideUrlToNew}
+                              className="px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold transition shadow-lg shadow-rose-600/30 cursor-pointer flex items-center gap-1.5"
+                            >
+                              <PlusCircle className="w-4 h-4" />
+                              এই ভিডিওটি ফিডে যোগ করুন (Add to Feed)
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* METHOD 1: GITHUB RELEASES (THE ULTIMATE FREE SOLUTION) */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/90 border border-emerald-500/30 space-y-3.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold">
+                        ১
+                      </div>
+                      <h4 className="font-bold text-sm text-white">
+                        পদ্ধতি ১: GitHub Releases (১০০% ফ্রি — চিরস্থায়ী ও সবচেয়ে দ্রুততম)
+                      </h4>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold">
+                      RECOMMENDED
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-zinc-900/90 rounded-xl border border-zinc-800 text-xs text-zinc-300 space-y-1.5">
+                    <p className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                      <ShieldCheck className="w-4 h-4" />
+                      <span>গিটহাব কি সম্পূর্ণ ফ্রি? Student Pack বা Pro কি লাগবে?</span>
+                    </p>
+                    <p className="text-zinc-300 leading-relaxed">
+                      <strong>একদমই না!</strong> সাধারণ ফ্রি গিটহাব একাউন্টেই প্রতিটি রিলিজ ফাইলে <strong>সর্বোচ্চ ২ জিবি (2 GB)</strong> পর্যন্ত যেকোনো সাইজের ভিডিও ফাইল ফ্রিতে আপলোড করা যায়। গিটহাব সরাসরি Fastly Global CDN দিয়ে ফুল স্পিড বাফারিং ও CORS সাপোর্ট প্রদান করে। এটি কখনো এক্সপায়ার হয় না!
+                    </p>
+                  </div>
+
+                  {/* Step-by-Step Instructions */}
+                  <div className="space-y-4 text-xs text-zinc-300">
+                    <p className="font-semibold text-white">ভিডিও আপলোড করার সহজ ধাপসমূহ:</p>
+
+                    <div className="space-y-2 text-zinc-400 pl-1">
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">১.</span>
+                        <span>
+                          আপনার GitHub রিপোজিটরির Releases পেজে যান:
+                        </span>
+                      </div>
+
+                      <div className="pl-5 pb-1">
+                        <a
+                          href={`https://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/new`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 text-emerald-300 hover:bg-emerald-600/30 border border-emerald-500/40 text-xs font-semibold cursor-pointer"
+                        >
+                          <ExternalLink className="w-3.5 h-3.5" />
+                          সরাসরি নতুন রিলিজ পেজ খুলুন (github.com/{githubConfig.owner}/{githubConfig.repo}/releases/new)
+                        </a>
+                      </div>
+
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">২.</span>
+                        <span>
+                          <strong>"Choose a tag"</strong> এ ক্লিক করে যেকোনো নাম লিখুন (যেমন: <code className="text-white bg-zinc-800 px-1 rounded">v1.0.0</code> বা <code className="text-white bg-zinc-800 px-1 rounded">videos</code>) এবং <em>Create new tag</em> চাপুন।
+                        </span>
+                      </div>
+
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">৩.</span>
+                        <span>
+                          নিচে <strong>"Attach binaries by dropping them here"</strong> বক্সে আপনার ফোন বা পিসি থেকে ভিডিও ফাইল (.mp4) ড্র্যাগ করে ছেড়ে দিন।
+                        </span>
+                      </div>
+
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">৪.</span>
+                        <span>
+                          সবুজ <strong>"Publish release"</strong> বাটনে ক্লিক করুন।
+                        </span>
+                      </div>
+
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-emerald-400 font-bold">৫.</span>
+                        <span>
+                          আপলোড হওয়া ফাইলের নামের উপর রাইট-ক্লিক বা লং-প্রেস করে <strong>"Copy link address"</strong> কপি করুন।
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* SUB-SECTION A: BULK / MULTIPLE VIDEOS AT ONCE */}
+                    <div className="p-3.5 rounded-xl bg-amber-950/30 border border-amber-500/30 space-y-2">
+                      <div className="flex items-center gap-2 text-amber-400 font-bold text-xs">
+                        <Layers className="w-4 h-4 shrink-0" />
+                        <span>১. একসাথে অনেকগুলো (Bulk) ভিডিও আপলোড করার নিয়ম:</span>
+                      </div>
+                      <p className="text-zinc-300 leading-relaxed text-[11px]">
+                        GitHub Releases এ কোনো সংখ্যাগত লিমিট নেই! আপনি চাইলে <strong>"Attach binaries"</strong> বক্সে একসাথে ৫টি, ১০টি বা ২০টি ভিডিও ফাইল ড্র্যাগ করে একবারে ড্রপ করে দিতে পারেন। সব ফাইল আপলোড সম্পন্ন হলে <strong>"Publish release"</strong> এ ক্লিক করুন। এরপর ফাইলগুলোর লিংক কপি করে আমাদের অ্যাডমিনের <strong>"⚡ একসাথে অনেকগুলো যোগ (Bulk)"</strong> ট্যাবে পেস্ট করলেই মাত্র ১ ক্লিকে সবগুলো ভিডিও ফিডে যুক্ত হয়ে যাবে!
+                      </p>
+                    </div>
+
+                    {/* SUB-SECTION B: SUBSEQUENT / ONE BY ONE VIDEOS */}
+                    <div className="p-3.5 rounded-xl bg-blue-950/30 border border-blue-500/30 space-y-2">
+                      <div className="flex items-center gap-2 text-blue-400 font-bold text-xs">
+                        <RefreshCw className="w-4 h-4 shrink-0" />
+                        <span>২. পরবর্তীতে একটার পর একটা (Sequential) নতুন ভিডিও যোগ করার নিয়ম:</span>
+                      </div>
+                      <div className="text-zinc-300 space-y-2 text-[11px] leading-relaxed">
+                        <div className="p-2.5 rounded-lg bg-zinc-900/90 border border-zinc-800">
+                          <p className="text-blue-300 font-semibold mb-0.5">
+                            ⚡ উপায় ১ (বিদ্যমান রিলিজ এডিট করা — সবচেয়ে সহজ ও দ্রুত):
+                          </p>
+                          <p className="text-zinc-400">
+                            নতুন রিলিজ বা ট্যাগ তৈরির কোনো দরকার নেই! আপনার আগের রিলিজের পেজে গিয়ে ডানপাশের পেন্সিল আইকন <strong>"Edit release"</strong> এ চাপুন। নতুন ভিডিওটি ড্র্যাগ করে ড্রপ বক্সে ছেড়ে দিন এবং নিচে <strong>"Update release"</strong> চাপুন। নতুন ফাইলের লিংক কপি করে অ্যাডমিনের <strong>"+ একক ভিডিও"</strong> ফর্মে যোগ করে নিন।
+                          </p>
+                        </div>
+
+                        <div className="p-2.5 rounded-lg bg-zinc-900/90 border border-zinc-800">
+                          <p className="text-emerald-300 font-semibold mb-0.5">
+                            📦 উপায় ২ (নতুন ট্যাগ বা রিলিজ তৈরি করা — পর্বভিত্তিক বিন্যাস):
+                          </p>
+                          <p className="text-zinc-400">
+                            আপনি চাইলে প্রতি নতুন ব্যাচ বা পর্বের জন্য নতুন রিলিজ তৈরি করতে পারেন: <strong>"Draft a new release"</strong> এ গিয়ে নতুন ট্যাগ (যেমন: <code className="text-white bg-zinc-800 px-1 rounded">v2.0.0</code> বা <code className="text-white bg-zinc-800 px-1 rounded">batch-2</code>) দিয়ে নতুন ভিডিও আপলোড করে <strong>Publish</strong> করুন।
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* METHOD 2: CLOUDINARY (FREE FOREVER TIER) */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/90 border border-blue-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-400 flex items-center justify-center font-bold">
+                        ২
+                      </div>
+                      <h4 className="font-bold text-sm text-white">
+                        পদ্ধতি ২: Cloudinary Free Forever (মাসে ২৫ জিবি ব্যান্ডউইথ)
+                      </h4>
+                    </div>
+                    <span className="px-2 py-0.5 rounded-full bg-blue-500/20 text-blue-300 text-[10px] font-bold">
+                      FAST CDN
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    Cloudinary তে কোনো ক্রেডিট কার্ড ছাড়াই সম্পূর্ণ ফ্রি একাউন্ট তৈরি করা যায়। এটি স্বয়ংক্রিয়ভাবে মোবাইল ফোনের জন্য ভিডিও অপটিমাইজ করে।
+                  </p>
+
+                  <div className="space-y-1.5 text-xs text-zinc-400 pl-1">
+                    <p>• ১. <a href="https://cloudinary.com/users/register_free" target="_blank" rel="noopener noreferrer" className="text-blue-400 underline">cloudinary.com</a> এ গিয়ে ফ্রি একাউন্ট খুলুন।</p>
+                    <p>• ২. <strong>Media Library</strong> তে ভিডিও আপলোড করুন।</p>
+                    <p>• ৩. ভিডিওর উপর ক্লিক করে <strong>"Copy URL"</strong> লিংকটি কপি করে SnipTok এ পেস্ট করুন।</p>
+                  </div>
+                </div>
+
+                {/* METHOD 3: DROPBOX FIX & WHY IT FAILED */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/90 border border-zinc-800 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-zinc-800 text-zinc-300 flex items-center justify-center font-bold">
+                      ৩
+                    </div>
+                    <h4 className="font-bold text-sm text-white">
+                      ড্রপবক্সে কেন রিফ্রেশ দিলে সমস্যা হতো এবং কীভাবে এড়াবেন?
+                    </h4>
+                  </div>
+
+                  <div className="text-xs text-zinc-400 space-y-2 leading-relaxed">
+                    <p>
+                      <strong>সমস্যার কারণ:</strong> ড্রপবক্স থেকে লগইন অবস্থায় লিংক কপি করলে ড্রপবক্স লিংকের সাথে <code className="text-rose-400 bg-zinc-900 px-1 rounded">&st=xyz</code> এবং <code className="text-rose-400 bg-zinc-900 px-1 rounded">&e=1</code> নামক সাময়িক সেশন টোকেন যুক্ত করে। এই টোকেন ৩-৫ মিনিট পরেই নষ্ট হয়ে যায়! এছাড়া পেজ রিফ্রেশ দিলে ব্রাউজার যখন ভিডিও ফাইলের নির্দিষ্ট অংশ চায় (HTTP 206 Range Request), ড্রপবক্সের ফ্রি সার্ভার তা ব্লক করে দেয়।
+                    </p>
+                    <p>
+                      <strong>আমাদের সমাধান:</strong> SnipTok এ এখন একটি অটোমেটিক সেশন ক্লিনার যুক্ত আছে যা এই মেয়াদোত্তীর্ণ টোকেন স্বয়ংক্রিয়ভাবে মুছে ফেলে। এছাড়া প্লেয়ার এররে <strong>"অফলাইনে সেভ করুন"</strong> বাটনে চাপলে এটি সরাসরি ব্রাউজারের মেমোরিতে (IndexedDB) সম্পূর্ণ ভিডিওটি ক্যাশ করে নেয়, যার ফলে রিফ্রেশ দিলেও আর কখনোই কোনো এরর আসবে না!
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 4: GITHUB LIVE SYNC */}
             {activeTab === 'github' && (
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 no-scrollbar">
                 {/* Information Card */}
@@ -908,7 +1558,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                       </label>
                       <input
                         type="text"
-                        placeholder="mahabubxblog.github.io"
+                        placeholder="Snip-newM2"
                         value={githubConfig.repo}
                         onChange={(e) => setGithubConfig({ ...githubConfig, repo: e.target.value })}
                         className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-700 rounded-xl text-xs text-zinc-100 font-mono focus:outline-none focus:border-rose-500 min-h-[44px]"

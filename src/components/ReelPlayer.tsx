@@ -443,10 +443,13 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
               <span>💡 দ্রুত সমাধান টিপস:</span>
             </p>
             <p className="text-zinc-400 leading-normal">
-              ১. <strong>Dropbox লিংক:</strong> ড্রপবক্স ফাইলে গিয়ে <em>Share &gt; "Anyone with link can view"</em> নিশ্চিত করে লিংক কপি করুন।
+              ১. <strong>১০০% ফ্রি স্থায়ী সমাধান:</strong> আপনার GitHub রিপোজিটরির <em>Releases</em> এ ভিডিও আপলোড করে লিংক দিন (সর্বোচ্চ ২ জিবি/ভিডিও, কোনো লিমিট বা রিফ্রেশ সমস্যা নেই)।
             </p>
             <p className="text-zinc-400 leading-normal">
-              ২. <strong>Brave ব্রাউজার:</strong> উপরে সিংহ আইকনে ট্যাপ করে <em>Brave Shields সাময়িক বন্ধ</em> করে সাইটটি রিফ্রেশ দিন।
+              ২. <strong>Dropbox লিংক:</strong> ড্রপবক্স ফাইলে গিয়ে <em>Share &gt; "Anyone with link can view"</em> নিশ্চিত করে লিংক কপি করুন এবং <em>"অফলাইনে সেভ করুন"</em> এ চাপুন।
+            </p>
+            <p className="text-zinc-400 leading-normal">
+              ৩. <strong>Brave ব্রাউজার:</strong> উপরে সিংহ আইকনে ট্যাপ করে <em>Brave Shields সাময়িক বন্ধ</em> করে সাইটটি রিফ্রেশ দিন।
             </p>
           </div>
         </div>
