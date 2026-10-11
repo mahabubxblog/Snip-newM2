@@ -12,6 +12,18 @@ export const DEFAULT_CLOUD_CONFIG: CloudSyncConfig = {
 };
 
 /**
+ * Detect whether the app is running on a static host (GitHub Pages, file protocol, etc.)
+ * where server-side Express routes (/api/videos) are unavailable.
+ */
+export function isStaticHosting(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.location.hostname.includes('github.io') ||
+    window.location.protocol === 'file:'
+  );
+}
+
+/**
  * Get saved Cloud Sync configuration from LocalStorage
  */
 export function getStoredCloudConfig(): CloudSyncConfig {
@@ -19,15 +31,24 @@ export function getStoredCloudConfig(): CloudSyncConfig {
     const raw = localStorage.getItem(CLOUD_CONFIG_STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      const isStatic = isStaticHosting();
+      // On static hosting (like GitHub Pages), default provider away from non-existent /api server
+      const defaultProvider = isStatic ? 'npoint' : 'server';
       return {
         ...DEFAULT_CLOUD_CONFIG,
+        provider: defaultProvider,
         ...parsed,
+        // Override 'server' on GitHub Pages so users aren't misled into 405 errors
+        ...(isStatic && parsed.provider === 'server' ? { provider: 'npoint' } : {}),
       };
     }
   } catch (err) {
     console.warn('Could not read cloud sync config from storage:', err);
   }
-  return DEFAULT_CLOUD_CONFIG;
+  return {
+    ...DEFAULT_CLOUD_CONFIG,
+    provider: isStaticHosting() ? 'npoint' : 'server',
+  };
 }
 
 /**
@@ -63,9 +84,22 @@ export async function testCloudEndpoint(config: CloudSyncConfig): Promise<{
 }> {
   try {
     if (config.provider === 'server') {
+      if (isStaticHosting()) {
+        return {
+          success: false,
+          message: 'GitHub Pages বা স্ট্যাটিক হোস্টিং-এ এক্সপ্রেস ব্যাকএন্ড সক্রিয় থাকে না। আপনার আসল ডেটাবেজ হলো GitHub Repository (public/videos.json)। অনুগ্রহ করে "GitHub লাইভ সিঙ্ক" ট্যাব ব্যবহার করুন!',
+        };
+      }
       const res = await fetch('/api/videos', {
         headers: { 'Cache-Control': 'no-cache' },
       });
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          message: 'সার্ভার থেকে JSON এর পরিবর্তে স্ট্যাটিক ওয়েবপেজ পাওয়া গেছে (API সক্রিয় নয়)। অনুগ্রহ করে "GitHub লাইভ সিঙ্ক" বা npoint.io ব্যবহার করুন।',
+        };
+      }
       if (res.ok) {
         const data = await res.json();
         const count = Array.isArray(data) ? data.length : 0;
@@ -183,18 +217,29 @@ export async function fetchVideosFromCloud(config?: CloudSyncConfig): Promise<{
   try {
     // 1. Try Server Endpoint if configured or fallback
     if (activeConfig.provider === 'server') {
-      const res = await fetch('/api/videos', {
-        headers: { 'Cache-Control': 'no-cache, no-store' },
-      });
-      if (res.ok) {
-        const list = await res.json();
-        if (Array.isArray(list) && list.length > 0) {
-          return {
-            success: true,
-            videos: list as VideoItem[],
-            message: `সার্ভার থেকে ${list.length}টি ভিডিও সফলভাবে লোড হয়েছে`,
-          };
+      if (isStaticHosting()) {
+        return {
+          success: false,
+          message: 'GitHub Pages এ লোকাল এক্সপ্রেস সার্ভার নিষ্ক্রিয়',
+        };
+      }
+      try {
+        const res = await fetch('/api/videos', {
+          headers: { 'Cache-Control': 'no-cache, no-store' },
+        });
+        const contentType = res.headers.get('content-type') || '';
+        if (res.ok && contentType.includes('application/json')) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            return {
+              success: true,
+              videos: list as VideoItem[],
+              message: `সার্ভার থেকে ${list.length}টি ভিডিও সফলভাবে লোড হয়েছে`,
+            };
+          }
         }
+      } catch (err) {
+        console.warn('Server fetch error:', err);
       }
     }
 
@@ -289,6 +334,13 @@ export async function pushVideosToCloud(
   try {
     // 1. Built-in Server route
     if (activeConfig.provider === 'server') {
+      if (isStaticHosting()) {
+        return {
+          success: false,
+          message: 'GitHub Pages বা স্ট্যাটিক হোস্টিং-এ এক্সপ্রেস ব্যাকএন্ড সক্রিয় থাকে না। আপনার আসল ডেটাবেজ হলো GitHub Repository (public/videos.json)। অনুগ্রহ করে "GitHub লাইভ সিঙ্ক" ট্যাব ব্যবহার করে আপনার গিটহাবে অটো-কমিট করুন!',
+        };
+      }
+
       const res = await fetch('/api/videos', {
         method: 'POST',
         headers: {
@@ -299,6 +351,14 @@ export async function pushVideosToCloud(
           videos: sanitized,
         }),
       });
+
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('application/json')) {
+        return {
+          success: false,
+          message: `সার্ভার এরর (স্ট্যাটাস: ${res.status}): এই হোস্টিংয়ে এক্সপ্রেস ব্যাকএন্ড সক্রিয় নয়। অনুগ্রহ করে "GitHub লাইভ সিঙ্ক" ব্যবহার করুন।`,
+        };
+      }
 
       if (res.ok) {
         const data = await res.json();

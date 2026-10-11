@@ -15,7 +15,9 @@ import {
 import {
   fetchVideosFromCloud,
   pushVideosToCloud,
+  isStaticHosting,
 } from './utils/cloudSync';
+import { fetchRemoteVideosFromGitHub } from './utils/githubSync';
 import { FeedContainer } from './components/FeedContainer';
 import { CommentsDrawer } from './components/CommentsDrawer';
 import { StorageManagerModal } from './components/StorageManagerModal';
@@ -24,6 +26,36 @@ import { PWAInstallBanner } from './components/PWAInstallBanner';
 
 // BUILT-IN FALLBACK SEED VIDEOS (Ensures flawless startup even with zero network or local file restrictions)
 const INITIAL_FALLBACK_VIDEOS: VideoItem[] = [
+  {
+    id: 'snip-mv3iawdd-6cqb',
+    title: 'M2',
+    caption: '#shorts #viral #bangla',
+    url: 'https://files.catbox.moe/hnxoyx.webm',
+    originalUrl: 'https://files.catbox.moe/hnxoyx.webm',
+    creator: 'মাহাবুব আহমেদ',
+    creatorHandle: '@mahabub_creator',
+    creatorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    audioTrack: 'Original Sound - SnipTok Beats',
+    likes: 20,
+    commentsCount: 0,
+    createdAt: '2026-10-11T07:33:22.657Z',
+    isLocalCustom: true,
+  },
+  {
+    id: 'snip-mv35khqb-xdar',
+    title: 'M1',
+    caption: '#shorts #viral #bangla',
+    url: 'https://files.catbox.moe/2q09bi.webm',
+    originalUrl: 'https://files.catbox.moe/2q09bi.webm',
+    creator: 'মাহাবুব আহমেদ',
+    creatorHandle: '@mahabub_creator',
+    creatorAvatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150&auto=format&fit=crop&q=80',
+    audioTrack: 'Original Sound - SnipTok Beats',
+    likes: 45,
+    commentsCount: 0,
+    createdAt: '2026-10-11T01:36:55.235Z',
+    isLocalCustom: true,
+  },
   {
     id: 'snip-01',
     title: 'মেঘের রাজ্যে সাজেক ভ্যালি ⛰️',
@@ -165,46 +197,88 @@ export default function App() {
     };
   }, []);
 
-  // Load initial videos from JSON and LocalStorage (Dual-Save Strategy)
+  // Load initial videos from JSON and LocalStorage (Authoritative Remote + Offline Fallback)
   useEffect(() => {
     let isMounted = true;
 
     const initLoad = async () => {
       let combinedVideos = [...INITIAL_FALLBACK_VIDEOS];
+      let loadedFromRemote = false;
 
-      // 1. Try fetching from Cloud Sync (Server / npoint / JSONBin)
+      // 1. First, check if GitHub API sync config is saved in LocalStorage
       try {
-        const cloudRes = await fetchVideosFromCloud();
-        if (cloudRes.success && Array.isArray(cloudRes.videos) && cloudRes.videos.length > 0) {
-          combinedVideos = cloudRes.videos;
-        } else {
-          // Fallback to static public/videos.json
-          const res = await fetch('./videos.json');
-          if (res.ok) {
-            const remoteList = await res.json();
-            if (Array.isArray(remoteList) && remoteList.length > 0) {
-              combinedVideos = remoteList;
+        const ghRaw = localStorage.getItem('sniptok_github_sync_config');
+        if (ghRaw) {
+          const ghConfig = JSON.parse(ghRaw);
+          if (ghConfig.owner && ghConfig.repo) {
+            const ghRes = await fetchRemoteVideosFromGitHub(ghConfig);
+            if (ghRes.success && Array.isArray(ghRes.data) && ghRes.data.length > 0) {
+              combinedVideos = ghRes.data;
+              loadedFromRemote = true;
             }
           }
         }
       } catch (err) {
-        console.warn('Could not fetch cloud/static videos.json, using seed fallback:', err);
+        console.warn('GitHub remote init check:', err);
       }
 
-      // 2. Merge with locally saved custom videos in localStorage
-      try {
-        const localCustom = localStorage.getItem('sniptok_custom_videos_list');
-        if (localCustom) {
-          const parsedLocal = JSON.parse(localCustom);
-          if (Array.isArray(parsedLocal) && parsedLocal.length > 0) {
-            combinedVideos = parsedLocal;
+      // 2. If not loaded via GitHub API, fetch static ./videos.json with cache-busting
+      if (!loadedFromRemote) {
+        try {
+          const res = await fetch(`./videos.json?_cb=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { 'Cache-Control': 'no-cache, no-store' },
+          });
+          if (res.ok) {
+            const remoteList = await res.json();
+            if (Array.isArray(remoteList) && remoteList.length > 0) {
+              combinedVideos = remoteList;
+              loadedFromRemote = true;
+            }
           }
+        } catch (err) {
+          console.warn('Could not fetch static ./videos.json:', err);
         }
-      } catch (err) {
-        console.warn('LocalStorage videos parse error:', err);
       }
 
-      // 3. Check IndexedDB for existing cached video blobs
+      // 3. If still not loaded, try configured Cloud Provider (npoint / jsonbin / server)
+      if (!loadedFromRemote) {
+        try {
+          const cloudRes = await fetchVideosFromCloud();
+          if (cloudRes.success && Array.isArray(cloudRes.videos) && cloudRes.videos.length > 0) {
+            combinedVideos = cloudRes.videos;
+            loadedFromRemote = true;
+          }
+        } catch (err) {
+          console.warn('Could not fetch cloud sync videos:', err);
+        }
+      }
+
+      // 4. Persistence & LocalStorage reconciliation
+      if (loadedFromRemote) {
+        // Authoritative remote list acquired! Save to localStorage so offline mode has the latest version
+        try {
+          const cleanToStore = combinedVideos.map(({ objectUrl, loadError, ...rest }) => rest);
+          localStorage.setItem('sniptok_custom_videos_list', JSON.stringify(cleanToStore));
+        } catch (err) {
+          console.warn('LocalStorage sync error:', err);
+        }
+      } else {
+        // Device is offline or network failed: restore from LocalStorage
+        try {
+          const localCustom = localStorage.getItem('sniptok_custom_videos_list');
+          if (localCustom) {
+            const parsedLocal = JSON.parse(localCustom);
+            if (Array.isArray(parsedLocal) && parsedLocal.length > 0) {
+              combinedVideos = parsedLocal;
+            }
+          }
+        } catch (err) {
+          console.warn('LocalStorage fallback parse error:', err);
+        }
+      }
+
+      // 5. Check IndexedDB for existing cached video blobs
       try {
         const downloadedIds = await getAllDownloadedVideoIds();
         if (!isMounted) return;
@@ -242,46 +316,73 @@ export default function App() {
     };
   }, []);
 
-  // Multi-device Auto-Sync: Periodically check Cloud for remote changes so all phones stay updated
+  // Multi-device Auto-Sync: Periodically check GitHub / static videos.json / Cloud for remote updates
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
 
-    const checkCloudUpdates = async () => {
+    const checkRemoteUpdates = async () => {
       if (!isDeviceOnline || isOfflineSimulated) return;
+
+      let latestRemoteList: VideoItem[] | null = null;
+
+      // 1. Try static ./videos.json with cache buster
       try {
-        const cloudResult = await fetchVideosFromCloud();
-        if (
-          cloudResult.success &&
-          Array.isArray(cloudResult.videos) &&
-          cloudResult.videos.length > 0
-        ) {
-          const remoteList = cloudResult.videos;
-          setAllVideos((prev) => {
-            const prevIds = prev.map((v) => v.id).join(',');
-            const remoteIds = remoteList.map((v) => v.id).join(',');
-            if (prevIds !== remoteIds || prev.length !== remoteList.length) {
-              showToast(`🔄 ক্লাউড থেকে নতুন ভিডিও আপডেট হয়েছে (${remoteList.length}টি)!`, 'success');
-              try {
-                localStorage.setItem(
-                  'sniptok_custom_videos_list',
-                  JSON.stringify(remoteList.map(({ objectUrl, loadError, ...r }) => r))
-                );
-              } catch {
-                // ignore
-              }
-              return remoteList;
-            }
-            return prev;
-          });
+        const res = await fetch(`./videos.json?_cb=${Date.now()}`, {
+          cache: 'no-store',
+          headers: { 'Cache-Control': 'no-cache, no-store' },
+        });
+        if (res.ok) {
+          const list = await res.json();
+          if (Array.isArray(list) && list.length > 0) {
+            latestRemoteList = list;
+          }
         }
-      } catch (err) {
-        console.warn('Auto cloud sync check error:', err);
+      } catch {
+        // ignore
+      }
+
+      // 2. If not found or if cloud is configured, check cloud provider
+      if (!latestRemoteList) {
+        try {
+          const cloudResult = await fetchVideosFromCloud();
+          if (
+            cloudResult.success &&
+            Array.isArray(cloudResult.videos) &&
+            cloudResult.videos.length > 0
+          ) {
+            latestRemoteList = cloudResult.videos;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      // 3. If we got remote list, compare and update
+      if (latestRemoteList && Array.isArray(latestRemoteList)) {
+        const remoteList = latestRemoteList;
+        setAllVideos((prev) => {
+          const prevIds = prev.map((v) => v.id).join(',');
+          const remoteIds = remoteList.map((v) => v.id).join(',');
+          if (prevIds !== remoteIds || prev.length !== remoteList.length) {
+            showToast(`🔄 নতুন ভিডিও আপডেট হয়েছে (${remoteList.length}টি)!`, 'success');
+            try {
+              localStorage.setItem(
+                'sniptok_custom_videos_list',
+                JSON.stringify(remoteList.map(({ objectUrl, loadError, ...r }) => r))
+              );
+            } catch {
+              // ignore
+            }
+            return remoteList;
+          }
+          return prev;
+        });
       }
     };
 
-    timer = setInterval(checkCloudUpdates, 25000);
+    timer = setInterval(checkRemoteUpdates, 20000);
     const handleFocus = () => {
-      checkCloudUpdates();
+      checkRemoteUpdates();
     };
     window.addEventListener('focus', handleFocus);
 
@@ -383,9 +484,11 @@ export default function App() {
       console.warn('LocalStorage save error:', err);
     }
 
-    // 2. Push to Cloud Sync so all phones update
+    // 2. Push to Cloud Sync so all phones update (only if external provider or active server backend)
     try {
-      pushVideosToCloud(safeList, undefined, 'Ma44332211');
+      if (!isStaticHosting()) {
+        pushVideosToCloud(safeList, undefined, 'Ma44332211');
+      }
     } catch (cloudErr) {
       console.warn('Auto cloud push error on save:', cloudErr);
     }

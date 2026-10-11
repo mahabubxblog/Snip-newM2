@@ -46,6 +46,7 @@ import {
   fetchVideosFromCloud,
   pushVideosToCloud,
   testCloudEndpoint,
+  isStaticHosting,
 } from '../utils/cloudSync';
 
 interface AdminStudioModalProps {
@@ -299,7 +300,9 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(safeList);
     }
-    triggerCloudSync(safeList);
+    if (!isStaticHosting() || cloudConfig.provider !== 'server') {
+      triggerCloudSync(safeList);
+    }
   };
 
   // Move video down in slot order
@@ -313,7 +316,9 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(safeList);
     }
-    triggerCloudSync(safeList);
+    if (!isStaticHosting() || cloudConfig.provider !== 'server') {
+      triggerCloudSync(safeList);
+    }
   };
 
   // Save / Update video
@@ -382,8 +387,10 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(updatedList);
     }
-    // Auto push to Cloud JSON Bin / server
-    triggerCloudSync(updatedList);
+    // Auto push to Cloud JSON Bin (only if not on static hosting or provider is external)
+    if (!isStaticHosting() || cloudConfig.provider !== 'server') {
+      triggerCloudSync(updatedList);
+    }
 
     setTimeout(() => {
       setActiveTab('list');
@@ -399,7 +406,9 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
         triggerGitHubSync(updatedList);
       }
-      triggerCloudSync(updatedList);
+      if (!isStaticHosting() || cloudConfig.provider !== 'server') {
+        triggerCloudSync(updatedList);
+      }
     }
   };
 
@@ -525,16 +534,26 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   // Pull live videos from GitHub
   const handlePullFromGitHub = async () => {
     setIsPullingGh(true);
+    setGhSyncResult(null);
     try {
       const res = await fetchRemoteVideosFromGitHub(githubConfig);
       if (res.success && res.data) {
         await onSaveVideos(res.data, res.message);
-        alert(res.message);
+        setGhSyncResult({
+          success: true,
+          message: res.message,
+        });
       } else {
-        alert(res.message);
+        setGhSyncResult({
+          success: false,
+          message: res.message || 'GitHub থেকে ভিডিও পাওয়া যায়নি',
+        });
       }
     } catch (err) {
-      alert('GitHub থেকে পুল করতে ব্যর্থ: ' + String(err));
+      setGhSyncResult({
+        success: false,
+        message: 'GitHub থেকে পুল করতে ব্যর্থ: ' + String(err),
+      });
     } finally {
       setIsPullingGh(false);
     }
@@ -547,6 +566,10 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     try {
       const res = await commitVideosListToGitHub(githubConfig, listToCommit);
       setGhSyncResult(res);
+      if (res.success) {
+        // Immediately persist to local device state so admin sees it right away
+        await onSaveVideos(listToCommit, 'সফলভাবে GitHub এ সরাসরি আপডেট হয়েছে!');
+      }
     } catch (err) {
       setGhSyncResult({
         success: false,
@@ -576,6 +599,13 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   };
 
   const triggerCloudSync = async (listToPush = videos) => {
+    if (isStaticHosting() && cloudConfig.provider === 'server') {
+      setCloudSyncResult({
+        success: false,
+        message: 'GitHub Pages এ কোনো এক্সপ্রেস ব্যাকএন্ড (/api) নেই। আপনার জন্য সরাসরি লাইভ সিঙ্কের সেরা মাধ্যম হলো "GitHub লাইভ সিঙ্ক" ট্যাব (যেখানে আপনি ইতিমধ্যে পুশ করেছেন)।',
+      });
+      return;
+    }
     setIsSyncingCloud(true);
     setCloudSyncResult(null);
     try {
@@ -596,6 +626,13 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   };
 
   const handlePullFromCloud = async () => {
+    if (isStaticHosting() && cloudConfig.provider === 'server') {
+      setCloudSyncResult({
+        success: false,
+        message: 'GitHub Pages এ এক্সপ্রেস ব্যাকএন্ড নেই। লাইভ ডেটা আনতে "GitHub লাইভ সিঙ্ক" ট্যাবে গিয়ে "GitHub থেকে লাইভ ডেটা আনুন (Pull)" এ ক্লিক করুন!',
+      });
+      return;
+    }
     setIsSyncingCloud(true);
     setCloudSyncResult(null);
     try {
@@ -1722,6 +1759,20 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   </p>
                 </div>
 
+                {/* Static Host Notice if running on GitHub Pages */}
+                {isStaticHosting() && (
+                  <div className="p-3.5 rounded-xl bg-amber-950/40 border border-amber-500/40 text-xs text-amber-200 flex items-start gap-2.5">
+                    <AlertCircle className="w-4 h-4 shrink-0 text-amber-400 mt-0.5" />
+                    <div>
+                      <strong className="text-white">GitHub Pages স্ট্যাটিক হোস্টিং শনাক্ত হয়েছে:</strong>
+                      <p className="mt-0.5 text-zinc-300 leading-relaxed">
+                        আপনার সাইটটি GitHub Pages এ চলছে। এখানে কোনো Node.js এক্সপ্রেস ব্যাকএন্ড থাকে না। 
+                        ভিডিও সবসময় লাইভ রাখার জন্য আপনার সেরা ও স্থায়ী মাধ্যম হলো <strong>"GitHub লাইভ সিঙ্ক"</strong> ট্যাব (যেখানে আপনি ইতিমধ্যে সফলভাবে ভিডিও পুশ করেছেন)। আপনি চাইলে অল্টারনেটিভ হিসেবে ফ্রি <strong>npoint.io</strong> বিন-ও ব্যবহার করতে পারেন।
+                      </p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Provider Selector */}
                 <div className="space-y-2">
                   <label className="block text-xs font-bold text-zinc-300">
@@ -1739,6 +1790,11 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                     >
                       <Server className="w-4 h-4" />
                       <span>লাইভ সার্ভার (/api)</span>
+                      {isStaticHosting() && (
+                        <span className="text-[9px] px-1 bg-amber-500/20 text-amber-300 rounded font-normal">
+                          Express Only
+                        </span>
+                      )}
                     </button>
 
                     <button
@@ -1786,13 +1842,27 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                 <div className="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-3.5">
                   {cloudConfig.provider === 'server' && (
                     <div className="space-y-2 text-xs text-zinc-300">
-                      <div className="flex items-center gap-2 text-emerald-400 font-semibold">
-                        <CheckCircle2 className="w-4 h-4" />
-                        <span>জিরো সেটআপ: SnipTok ব্যাকএন্ড সার্ভার সক্রিয়!</span>
-                      </div>
-                      <p className="text-zinc-400 leading-relaxed">
-                        কোনো বাড়তি বিন আইডি বা টোকেনের প্রয়োজন নেই। অ্যাডমিন প্যানেল থেকে ভিডিও সেভ করলে সরাসরি ব্যাকএন্ড সার্ভারে সেভ হবে এবং পৃথিবীর যেকোনো ডিভাইসের ব্যবহারকারীরা তাৎক্ষণিক ভিডিওর তালিকা পেয়ে যাবে।
-                      </p>
+                      {isStaticHosting() ? (
+                        <div className="space-y-1.5 p-3 rounded-lg bg-amber-950/30 border border-amber-700/50">
+                          <div className="flex items-center gap-2 text-amber-400 font-semibold">
+                            <AlertCircle className="w-4 h-4" />
+                            <span>GitHub Pages এ এক্সপ্রেস ব্যাকএন্ড অপ্রযোজ্য</span>
+                          </div>
+                          <p className="text-zinc-300 leading-relaxed text-[11px]">
+                            GitHub Pages স্ট্যাটিক ফাইল হোস্ট করে, কোনো এক্সপ্রেস API সার্ভার থাকে না। সরাসরি লাইভ সিঙ্কের জন্য অনুগ্রহ করে <strong>"GitHub লাইভ সিঙ্ক"</strong> ট্যাব ব্যবহার করুন অথবা <strong>npoint.io</strong> সিলেক্ট করুন।
+                          </p>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>জিরো সেটআপ: SnipTok ব্যাকএন্ড সার্ভার সক্রিয়!</span>
+                          </div>
+                          <p className="text-zinc-400 leading-relaxed">
+                            কোনো বাড়তি বিন আইডি বা টোকেনের প্রয়োজন নেই। অ্যাডমিন প্যানেল থেকে ভিডিও সেভ করলে সরাসরি ব্যাকএন্ড সার্ভারে সেভ হবে এবং পৃথিবীর যেকোনো ডিভাইসের ব্যবহারকারীরা তাৎক্ষণিক ভিডিওর তালিকা পেয়ে যাবে।
+                          </p>
+                        </>
+                      )}
                     </div>
                   )}
 
@@ -1973,12 +2043,19 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
             {activeTab === 'github' && (
               <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 no-scrollbar">
                 {/* Information Card */}
-                <div className="p-4 rounded-xl bg-zinc-950/70 border border-zinc-800 space-y-2">
-                  <div className="flex items-center gap-2 text-rose-400 font-semibold text-sm">
-                    <Github className="w-5 h-5" />
-                    <span>১০০% ফ্রি লাইভ গ্লোবাল সিঙ্ক (GitHub REST API)</span>
+                <div className="p-4 rounded-xl bg-zinc-950/70 border border-zinc-800 space-y-2.5">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2 text-rose-400 font-semibold text-sm">
+                      <Github className="w-5 h-5" />
+                      <span>১০০% ফ্রি লাইভ গ্লোবাল সিঙ্ক (GitHub REST API)</span>
+                    </div>
+                    {isStaticHosting() && (
+                      <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                        ★ আপনার সাইটের মূল ডেটাবেজ (Active)
+                      </span>
+                    )}
                   </div>
-                  <p className="text-xs text-zinc-400 leading-relaxed">
+                  <p className="text-xs text-zinc-300 leading-relaxed">
                     এখানে আপনার GitHub পার্সোনাল এক্সেস টোকেন কনফিগার করলে আপনি অ্যাডমিন থেকে ভিডিও যুক্ত বা এডিট করলে তা সরাসরি আপনার গিটহাব রিপোজিটরির <code className="text-zinc-200 bg-zinc-800 px-1.5 py-0.5 rounded font-mono">public/videos.json</code> ফাইলে অটোমেটিকভাবে কমিট হবে! ফলে সব ভিজিটর কোনো পেইড ডেটাবেস ছাড়াই সম্পূর্ণ ফ্রিতে রিয়েলটাইম আপডেট পাবে।
                   </p>
                   <div className="pt-1">
