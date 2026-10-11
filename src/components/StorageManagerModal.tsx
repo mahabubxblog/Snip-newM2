@@ -1,11 +1,26 @@
-import React, { useEffect, useState } from 'react';
-import { HardDrive, Trash2, Play, AlertTriangle, X, RefreshCw, CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useState, useRef } from 'react';
+import {
+  HardDrive,
+  Trash2,
+  Play,
+  AlertTriangle,
+  X,
+  RefreshCw,
+  CheckCircle2,
+  DownloadCloud,
+  Loader2,
+  Sparkles,
+  StopCircle,
+} from 'lucide-react';
+import confetti from 'canvas-confetti';
 import { StorageInfo, VideoItem } from '../types';
 import {
   getStorageUsage,
   deleteVideoBlob,
   clearAllOfflineStorage,
   formatBytes,
+  batchDownloadVideos,
+  BatchDownloadProgress,
 } from '../utils/indexedDB';
 
 interface StorageManagerModalProps {
@@ -14,6 +29,7 @@ interface StorageManagerModalProps {
   videos: VideoItem[];
   onPlayVideo: (videoId: string) => void;
   onStorageChanged: () => void;
+  onShowToast?: (msg: string, type?: 'success' | 'error' | 'info') => void;
 }
 
 export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({
@@ -22,10 +38,16 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({
   videos,
   onPlayVideo,
   onStorageChanged,
+  onShowToast,
 }) => {
   const [storageData, setStorageData] = useState<StorageInfo>({ totalBytes: 0, items: [] });
   const [isLoading, setIsLoading] = useState(false);
   const [confirmClear, setConfirmClear] = useState(false);
+
+  // Batch Download State
+  const [batchProgress, setBatchProgress] = useState<BatchDownloadProgress | null>(null);
+  const [isBatchDownloading, setIsBatchDownloading] = useState(false);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Close on Escape key press
   useEffect(() => {
@@ -79,10 +101,72 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
   const safeItems = Array.isArray(storageData.items) ? storageData.items : [];
   const safeVideos = Array.isArray(videos) ? videos : [];
+
+  // Calculate remaining un-downloaded videos
+  const downloadedIdSet = new Set(safeItems.map((item) => item.videoId));
+  const unDownloadedVideos = safeVideos.filter((v) => !downloadedIdSet.has(v.id));
+
+  const handleStartBatchDownload = async (count: number) => {
+    if (isBatchDownloading) return;
+    if (unDownloadedVideos.length === 0) {
+      if (onShowToast) onShowToast('সব ভিডিও ইতিমধ্যে অফলাইনে সংরক্ষিত আছে!', 'info');
+      return;
+    }
+
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    setIsBatchDownloading(true);
+
+    try {
+      const { successCount, failCount } = await batchDownloadVideos(
+        safeVideos,
+        downloadedIdSet,
+        count,
+        (progress) => {
+          setBatchProgress({ ...progress });
+        },
+        abortController.signal
+      );
+
+      await loadStorage();
+      onStorageChanged();
+
+      if (successCount > 0) {
+        confetti({
+          particleCount: 50,
+          spread: 80,
+          origin: { y: 0.7 },
+        });
+        if (onShowToast) {
+          onShowToast(`সফলভাবে ${successCount}টি ভিডিও অফলাইনে সেভ হয়েছে!`, 'success');
+        }
+      } else if (failCount > 0 && !abortController.signal.aborted) {
+        if (onShowToast) {
+          onShowToast(`ভিডিও ডাউনলোড ব্যর্থ হয়েছে (${failCount}টি)`, 'error');
+        }
+      }
+    } catch (err) {
+      console.warn('Batch download error:', err);
+    } finally {
+      setIsBatchDownloading(false);
+      abortControllerRef.current = null;
+      setTimeout(() => {
+        setBatchProgress(null);
+      }, 3000);
+    }
+  };
+
+  const handleCancelBatchDownload = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      setIsBatchDownloading(false);
+      if (onShowToast) onShowToast('ব্যাচ ডাউনলোড বন্ধ করা হয়েছে', 'info');
+    }
+  };
+
+  if (!isOpen) return null;
 
   // Map cached items to their video metadata if available
   const mappedItems = safeItems.map((item) => {
@@ -119,7 +203,7 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({
         </div>
 
         {/* Storage Summary Card */}
-        <div className="p-5 bg-zinc-950/50 border-b border-zinc-800/80">
+        <div className="p-4 sm:p-5 bg-zinc-950/50 border-b border-zinc-800/80">
           <div className="flex items-center justify-between mb-2">
             <span className="text-xs text-zinc-400 uppercase tracking-wider font-semibold">
               মোট সংরক্ষিত ডাটা
@@ -154,6 +238,80 @@ export const StorageManagerModal: React.FC<StorageManagerModalProps> = ({
             <span>সরাসরি অফলাইনে ইন্টারনেট ছাড়াই দেখার জন্য প্রস্তুত</span>
             <span>৫০০ MB প্রস্তাবিত সীমা</span>
           </p>
+        </div>
+
+        {/* QUICK BATCH DOWNLOAD SECTION */}
+        <div className="p-3 sm:p-4 bg-zinc-900/90 border-b border-zinc-800">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-1.5">
+              <DownloadCloud className="w-4 h-4 text-rose-400" />
+              <span className="text-xs font-bold text-zinc-200">
+                এক ক্লিকে ব্যাচ ডাউনলোড (Batch Download)
+              </span>
+            </div>
+            <span className="text-[11px] text-zinc-400 font-medium">
+              {unDownloadedVideos.length}টি বাকি
+            </span>
+          </div>
+
+          {isBatchDownloading && batchProgress ? (
+            <div className="p-3 rounded-xl bg-zinc-950 border border-rose-500/30 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-rose-300 font-semibold flex items-center gap-1.5">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-rose-500" />
+                  ডাউনলোড হচ্ছে: {batchProgress.completed + 1} / {batchProgress.total}
+                </span>
+                <span className="font-mono text-zinc-300 font-bold">{batchProgress.currentPercent}%</span>
+              </div>
+
+              <div className="w-full bg-zinc-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-rose-500 h-full transition-all duration-200"
+                  style={{
+                    width: `${Math.round(((batchProgress.completed + batchProgress.currentPercent / 100) / batchProgress.total) * 100)}%`,
+                  }}
+                />
+              </div>
+
+              <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                <span className="truncate max-w-[200px]">{batchProgress.currentTitle}</span>
+                <button
+                  onClick={handleCancelBatchDownload}
+                  className="text-red-400 hover:text-red-300 flex items-center gap-1 font-semibold cursor-pointer"
+                >
+                  <StopCircle className="w-3 h-3" />
+                  থামুন
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div>
+              <p className="text-[11px] text-zinc-400 mb-2 leading-relaxed">
+                পরবর্তী ভিডিওগুলো এক ক্লিকে লোকাল মেমোরিতে নামিয়ে রাখুন:
+              </p>
+              <div className="grid grid-cols-5 gap-1.5">
+                {[10, 20, 30, 40].map((num) => (
+                  <button
+                    key={num}
+                    onClick={() => handleStartBatchDownload(num)}
+                    disabled={unDownloadedVideos.length === 0}
+                    className="min-h-[38px] py-1.5 px-1 bg-zinc-800 hover:bg-rose-600 disabled:opacity-30 disabled:hover:bg-zinc-800 text-zinc-200 hover:text-white rounded-lg text-xs font-bold transition flex items-center justify-center cursor-pointer shadow-sm active:scale-95"
+                    title={`পরবর্তী ${num}টি ভিডিও ডাউনলোড করুন`}
+                  >
+                    +{num}টি
+                  </button>
+                ))}
+                <button
+                  onClick={() => handleStartBatchDownload(unDownloadedVideos.length)}
+                  disabled={unDownloadedVideos.length === 0}
+                  className="min-h-[38px] py-1.5 px-1 bg-rose-600 hover:bg-rose-500 disabled:opacity-30 text-white rounded-lg text-xs font-bold transition flex items-center justify-center cursor-pointer shadow-sm active:scale-95"
+                  title="সব বাকি ভিডিও ডাউনলোড করুন"
+                >
+                  সব ({unDownloadedVideos.length})
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Video List */}

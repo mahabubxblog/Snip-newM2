@@ -34,6 +34,9 @@ interface ReelPlayerProps {
   downloadProgress?: number; // 0 - 100 if downloading
   isDownloading?: boolean;
   onLikeToggle?: (videoId: string, isLiked: boolean) => void;
+  preloadMode?: 'auto' | 'metadata' | 'none';
+  isAutoAdvance?: boolean;
+  onEnded?: () => void;
 }
 
 interface FloatingHeart {
@@ -54,6 +57,9 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
   downloadProgress = 0,
   isDownloading = false,
   onLikeToggle,
+  preloadMode,
+  isAutoAdvance = false,
+  onEnded,
 }) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -384,10 +390,15 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
       <video
         ref={videoRef}
         src={videoSource}
-        loop
+        loop={!isAutoAdvance}
+        onEnded={() => {
+          if (isAutoAdvance && onEnded) {
+            onEnded();
+          }
+        }}
         playsInline
         webkit-playsinline="true"
-        preload={isActive ? 'auto' : 'none'}
+        preload={preloadMode ?? (isActive ? 'auto' : 'none')}
         onTimeUpdate={handleTimeUpdate}
         onWaiting={handleWaiting}
         onPlaying={handlePlaying}

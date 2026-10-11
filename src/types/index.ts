@@ -37,6 +37,16 @@ export interface GitHubSyncConfig {
   filePath: string;
 }
 
+export interface CloudSyncConfig {
+  provider: 'server' | 'jsonbin' | 'npoint' | 'custom';
+  binId: string;
+  apiKey?: string;
+  customUrl?: string;
+  autoSync: boolean;
+  syncIntervalSeconds: number;
+  lastSyncedAt?: string;
+}
+
 export interface StorageInfo {
   totalBytes: number;
   items: {

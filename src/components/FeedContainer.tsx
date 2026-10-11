@@ -8,6 +8,8 @@ import {
   Compass,
   ArrowUp,
   ArrowDown,
+  RotateCcw,
+  Repeat,
 } from 'lucide-react';
 import { VideoItem } from '../types';
 import { ReelPlayer } from './ReelPlayer';
@@ -55,13 +57,32 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
   const [isMuted, setIsMuted] = useState<boolean>(true); // Start muted per web autoplay policy
+  const [isAutoAdvance, setIsAutoAdvance] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sniptok_auto_advance') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  const toggleAutoAdvance = () => {
+    setIsAutoAdvance((prev) => {
+      const next = !prev;
+      try {
+        localStorage.setItem('sniptok_auto_advance', String(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
 
   // Safe videos array
   const safeVideos = Array.isArray(videos) ? videos : [];
 
   // Prevent out of bounds index if list size drops
   useEffect(() => {
-    if (safeVideos.length > 0 && activeIndex >= safeVideos.length) {
+    if (safeVideos.length > 0 && activeIndex > safeVideos.length) {
       setActiveIndex(Math.max(0, safeVideos.length - 1));
     }
   }, [safeVideos.length, activeIndex, setActiveIndex]);
@@ -80,12 +101,25 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 
       const scrollTop = container.scrollTop;
       const newIndex = Math.round(scrollTop / height);
-      const clampedIndex = Math.max(0, Math.min(safeVideos.length - 1, newIndex));
+      // Support index up to safeVideos.length for the End-of-Feed Loop card
+      const clampedIndex = Math.max(0, Math.min(safeVideos.length, newIndex));
 
-      if (clampedIndex !== activeIndex && safeVideos.length > 0) {
+      if (clampedIndex !== activeIndex && (safeVideos.length > 0 || clampedIndex === 0)) {
         setActiveIndex(clampedIndex);
       }
     });
+  }, [safeVideos.length, activeIndex, setActiveIndex]);
+
+  // Auto-advance callback when video playback finishes: loops back from last video to 1st video
+  const handleVideoEnded = useCallback(() => {
+    if (safeVideos.length <= 1) return;
+    const next = (activeIndex + 1) % safeVideos.length;
+    setActiveIndex(next);
+    const container = containerRef.current;
+    if (container) {
+      const height = container.clientHeight;
+      container.scrollTo({ top: next * height, behavior: 'smooth' });
+    }
   }, [safeVideos.length, activeIndex, setActiveIndex]);
 
   // Clean up RAF on unmount
@@ -97,7 +131,7 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
     };
   }, []);
 
-  // Keyboard navigation: Up/Down, j/k, 'm', Space
+  // Keyboard navigation: Up/Down with smooth Playlist Loop, j/k, 'm', Space
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Don't intercept if user is typing in an input or textarea
@@ -112,12 +146,16 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 
       if (e.key === 'ArrowDown' || e.key === 'j') {
         e.preventDefault();
-        const next = Math.min(safeVideos.length - 1, activeIndex + 1);
+        if (safeVideos.length === 0) return;
+        // Loop back to index 0 if on or past the last video
+        const next = activeIndex >= safeVideos.length - 1 ? 0 : activeIndex + 1;
         container.scrollTo({ top: next * height, behavior: 'smooth' });
         setActiveIndex(next);
       } else if (e.key === 'ArrowUp' || e.key === 'k') {
         e.preventDefault();
-        const prev = Math.max(0, activeIndex - 1);
+        if (safeVideos.length === 0) return;
+        // Loop back to last video if at index 0
+        const prev = activeIndex <= 0 ? safeVideos.length - 1 : activeIndex - 1;
         container.scrollTo({ top: prev * height, behavior: 'smooth' });
         setActiveIndex(prev);
       } else if (e.key === 'm' || e.key === 'M') {
@@ -213,8 +251,24 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
           </button>
         </div>
 
-        {/* Right: Offline Simulator + Storage Modal Trigger */}
+        {/* Right: Auto-Loop toggle + Offline Simulator + Storage Modal Trigger */}
         <div className="flex items-center gap-1.5 sm:gap-2">
+          {/* Auto-Advance / Playlist Loop Toggle */}
+          <button
+            onClick={toggleAutoAdvance}
+            className={`min-h-[44px] flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium backdrop-blur-md border transition cursor-pointer ${
+              isAutoAdvance
+                ? 'bg-rose-500/25 text-rose-300 border-rose-500/50 shadow-sm'
+                : 'bg-zinc-900/60 text-zinc-400 hover:text-white border-zinc-800'
+            }`}
+            title="অটো-লুপ মোড: ভিডিও শেষ হলে স্বয়ংক্রিয়ভাবে পরবর্তী ভিডিও এবং শেষ ভিডিওর পর ১ম ভিডিও থেকে শুরু হবে"
+          >
+            <Repeat className={`w-3.5 h-3.5 ${isAutoAdvance ? 'text-rose-400 animate-pulse' : 'text-zinc-400'}`} />
+            <span className="text-[10px] font-semibold hidden md:inline">
+              {isAutoAdvance ? 'অটো-লুপ চালু' : 'অটো-লুপ'}
+            </span>
+          </button>
+
           {/* Offline Simulator Switch */}
           <button
             onClick={onToggleOfflineSimulator}
@@ -308,52 +362,122 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
           onScroll={handleScroll}
           className="flex-1 w-full h-full snap-container overflow-y-scroll no-scrollbar"
         >
-          {safeVideos.map((video, idx) => (
-            <div key={video.id} className="w-full h-full snap-item relative">
-              <ReelPlayer
-                video={video}
-                isActive={idx === activeIndex}
-                isMuted={isMuted}
-                onToggleMute={toggleMute}
-                onOpenComments={onOpenComments}
-                onShare={onShareVideo}
-                onDownload={onDownloadVideo}
-                isDownloaded={downloadedVideoIds.has(video.id)}
-                downloadProgress={downloadProgressMap[video.id] || 0}
-                isDownloading={
-                  downloadProgressMap[video.id] !== undefined &&
-                  downloadProgressMap[video.id] < 100
-                }
-                onLikeToggle={onLikeToggle}
-              />
+          {safeVideos.map((video, idx) => {
+            const distance = idx - activeIndex;
+            // TikTok-style preloading: next 4-5 videos smart preloaded
+            let preloadMode: 'auto' | 'metadata' | 'none' = 'none';
+            if (distance === 0) {
+              preloadMode = 'auto';
+            } else if (distance === 1 || distance === 2) {
+              preloadMode = 'auto'; // Immediate next 2 videos buffered in high priority
+            } else if (distance === 3 || distance === 4 || distance === -1) {
+              preloadMode = 'metadata'; // Next 3-4 videos and previous 1 video metadata preloaded
+            } else {
+              preloadMode = 'none'; // Distant videos unbuffered to prevent network congestion
+            }
+
+            return (
+              <div key={video.id} className="w-full h-full snap-item relative">
+                <ReelPlayer
+                  video={video}
+                  isActive={idx === activeIndex}
+                  preloadMode={preloadMode}
+                  isMuted={isMuted}
+                  onToggleMute={toggleMute}
+                  onOpenComments={onOpenComments}
+                  onShare={onShareVideo}
+                  onDownload={onDownloadVideo}
+                  isDownloaded={downloadedVideoIds.has(video.id)}
+                  downloadProgress={downloadProgressMap[video.id] || 0}
+                  isDownloading={
+                    downloadProgressMap[video.id] !== undefined &&
+                    downloadProgressMap[video.id] < 100
+                  }
+                  onLikeToggle={onLikeToggle}
+                  isAutoAdvance={isAutoAdvance}
+                  onEnded={handleVideoEnded}
+                />
+              </div>
+            );
+          })}
+
+          {/* LOOP END CARD: যখন ব্যবহারকারী ফিডের সব ভিডিও দেখে ফেলবে */}
+          {safeVideos.length > 0 && (
+            <div className="w-full h-full snap-item relative bg-gradient-to-b from-zinc-950 via-zinc-900 to-black flex flex-col items-center justify-center p-6 text-center select-none">
+              <div className="max-w-sm w-full p-6 sm:p-7 rounded-3xl bg-zinc-900/95 border border-zinc-800/80 shadow-2xl backdrop-blur-xl flex flex-col items-center">
+                <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center justify-center mb-4 shadow-lg shadow-rose-500/10">
+                  <RotateCcw className="w-8 h-8" />
+                </div>
+
+                <h3 className="text-xl font-bold text-white mb-1.5">
+                  সব ভিডিও দেখা শেষ! 🎉
+                </h3>
+                <p className="text-xs text-zinc-400 mb-6 leading-relaxed">
+                  আপনি ফিডের মোট <strong className="text-white font-mono">{safeVideos.length}টি</strong> ভিডিওর সবগুলো উপভোগ করেছেন।
+                </p>
+
+                <div className="flex flex-col gap-2.5 w-full">
+                  <button
+                    onClick={() => {
+                      setActiveIndex(0);
+                      const container = containerRef.current;
+                      if (container) {
+                        container.scrollTo({ top: 0, behavior: 'smooth' });
+                      }
+                    }}
+                    className="w-full py-3.5 px-5 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white rounded-2xl text-sm font-bold shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition min-h-[44px]"
+                  >
+                    <RotateCcw className="w-4 h-4" />
+                    আবার ১ম ভিডিও থেকে শুরু করুন (Loop Feed)
+                  </button>
+
+                  <button
+                    onClick={onOpenStorageModal}
+                    className="w-full py-3 px-5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition min-h-[40px]"
+                  >
+                    <HardDrive className="w-4 h-4 text-emerald-400" />
+                    অফলাইনে সেভ করুন ({offlineVideosCount} টি সেভ করা)
+                  </button>
+                </div>
+              </div>
             </div>
-          ))}
+          )}
         </div>
       )}
 
-      {/* QUICK FLOATING NAV ARROWS (Desktop / Tablet Ergonomics) */}
+      {/* QUICK FLOATING NAV ARROWS (Desktop / Tablet Ergonomics with Loop Wrap-around) */}
       <div className="hidden lg:flex fixed right-6 top-1/2 -translate-y-1/2 flex-col gap-2 z-30">
         <button
           onClick={() => {
-            const prev = Math.max(0, activeIndex - 1);
+            if (safeVideos.length === 0) return;
+            const prev = activeIndex <= 0 ? safeVideos.length - 1 : activeIndex - 1;
             setActiveIndex(prev);
           }}
-          disabled={activeIndex <= 0}
-          className="p-3 rounded-full bg-zinc-900/80 hover:bg-zinc-800 disabled:opacity-20 text-white border border-zinc-700 transition cursor-pointer shadow-xl min-w-[44px] min-h-[44px] flex items-center justify-center"
-          title="পূর্ববর্তী ভিডিও (Up Arrow)"
+          className="p-3 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-white border border-zinc-700 transition cursor-pointer shadow-xl min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95"
+          title={activeIndex <= 0 ? "সর্বশেষ ভিডিওতে যান" : "পূর্ববর্তী ভিডিও (Up Arrow)"}
         >
           <ArrowUp className="w-5 h-5" />
         </button>
         <button
           onClick={() => {
-            const next = Math.min(safeVideos.length - 1, activeIndex + 1);
+            if (safeVideos.length === 0) return;
+            const next = activeIndex >= safeVideos.length - 1 ? 0 : activeIndex + 1;
             setActiveIndex(next);
           }}
-          disabled={activeIndex >= safeVideos.length - 1}
-          className="p-3 rounded-full bg-zinc-900/80 hover:bg-zinc-800 disabled:opacity-20 text-white border border-zinc-700 transition cursor-pointer shadow-xl min-w-[44px] min-h-[44px] flex items-center justify-center"
-          title="পরবর্তী ভিডিও (Down Arrow)"
+          className={`p-3 rounded-full bg-zinc-900/80 hover:bg-zinc-800 text-white border border-zinc-700 transition cursor-pointer shadow-xl min-w-[44px] min-h-[44px] flex items-center justify-center active:scale-95 ${
+            activeIndex >= safeVideos.length - 1 ? 'border-rose-500/60 text-rose-400 shadow-rose-500/20' : ''
+          }`}
+          title={
+            activeIndex >= safeVideos.length - 1
+              ? 'আবার ১ম ভিডিও থেকে দেখুন (Loop to Start)'
+              : 'পরবর্তী ভিডিও (Down Arrow)'
+          }
         >
-          <ArrowDown className="w-5 h-5" />
+          {activeIndex >= safeVideos.length - 1 ? (
+            <RotateCcw className="w-5 h-5 text-rose-400" />
+          ) : (
+            <ArrowDown className="w-5 h-5" />
+          )}
         </button>
       </div>
     </div>

@@ -12,6 +12,10 @@ import {
   downloadAndSaveVideo,
   revokeAllObjectUrls,
 } from './utils/indexedDB';
+import {
+  fetchVideosFromCloud,
+  pushVideosToCloud,
+} from './utils/cloudSync';
 import { FeedContainer } from './components/FeedContainer';
 import { CommentsDrawer } from './components/CommentsDrawer';
 import { StorageManagerModal } from './components/StorageManagerModal';
@@ -168,17 +172,23 @@ export default function App() {
     const initLoad = async () => {
       let combinedVideos = [...INITIAL_FALLBACK_VIDEOS];
 
-      // 1. Try fetching public/videos.json
+      // 1. Try fetching from Cloud Sync (Server / npoint / JSONBin)
       try {
-        const res = await fetch('./videos.json');
-        if (res.ok) {
-          const remoteList = await res.json();
-          if (Array.isArray(remoteList) && remoteList.length > 0) {
-            combinedVideos = remoteList;
+        const cloudRes = await fetchVideosFromCloud();
+        if (cloudRes.success && Array.isArray(cloudRes.videos) && cloudRes.videos.length > 0) {
+          combinedVideos = cloudRes.videos;
+        } else {
+          // Fallback to static public/videos.json
+          const res = await fetch('./videos.json');
+          if (res.ok) {
+            const remoteList = await res.json();
+            if (Array.isArray(remoteList) && remoteList.length > 0) {
+              combinedVideos = remoteList;
+            }
           }
         }
       } catch (err) {
-        console.warn('Could not fetch static videos.json, using seed fallback:', err);
+        console.warn('Could not fetch cloud/static videos.json, using seed fallback:', err);
       }
 
       // 2. Merge with locally saved custom videos in localStorage
@@ -231,6 +241,55 @@ export default function App() {
       isMounted = false;
     };
   }, []);
+
+  // Multi-device Auto-Sync: Periodically check Cloud for remote changes so all phones stay updated
+  useEffect(() => {
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const checkCloudUpdates = async () => {
+      if (!isDeviceOnline || isOfflineSimulated) return;
+      try {
+        const cloudResult = await fetchVideosFromCloud();
+        if (
+          cloudResult.success &&
+          Array.isArray(cloudResult.videos) &&
+          cloudResult.videos.length > 0
+        ) {
+          const remoteList = cloudResult.videos;
+          setAllVideos((prev) => {
+            const prevIds = prev.map((v) => v.id).join(',');
+            const remoteIds = remoteList.map((v) => v.id).join(',');
+            if (prevIds !== remoteIds || prev.length !== remoteList.length) {
+              showToast(`🔄 ক্লাউড থেকে নতুন ভিডিও আপডেট হয়েছে (${remoteList.length}টি)!`, 'success');
+              try {
+                localStorage.setItem(
+                  'sniptok_custom_videos_list',
+                  JSON.stringify(remoteList.map(({ objectUrl, loadError, ...r }) => r))
+                );
+              } catch {
+                // ignore
+              }
+              return remoteList;
+            }
+            return prev;
+          });
+        }
+      } catch (err) {
+        console.warn('Auto cloud sync check error:', err);
+      }
+    };
+
+    timer = setInterval(checkCloudUpdates, 25000);
+    const handleFocus = () => {
+      checkCloudUpdates();
+    };
+    window.addEventListener('focus', handleFocus);
+
+    return () => {
+      if (timer) clearInterval(timer);
+      window.removeEventListener('focus', handleFocus);
+    };
+  }, [isDeviceOnline, isOfflineSimulated, showToast]);
 
   // Filtered Videos based on "সব" vs "অফলাইন"
   const visibleVideos = useMemo(() => {
@@ -316,12 +375,19 @@ export default function App() {
     const safeList = Array.isArray(updatedVideos) ? updatedVideos : [];
     setAllVideos(safeList);
 
-    // Save locally
+    // 1. Save locally
     try {
       const cleanForStorage = safeList.map(({ objectUrl, loadError, ...rest }) => rest);
       localStorage.setItem('sniptok_custom_videos_list', JSON.stringify(cleanForStorage));
     } catch (err) {
       console.warn('LocalStorage save error:', err);
+    }
+
+    // 2. Push to Cloud Sync so all phones update
+    try {
+      pushVideosToCloud(safeList, undefined, 'Ma44332211');
+    } catch (cloudErr) {
+      console.warn('Auto cloud push error on save:', cloudErr);
     }
 
     if (notifyMsg) {
@@ -413,6 +479,7 @@ export default function App() {
         videos={allVideos}
         onPlayVideo={handlePlayVideoFromStorage}
         onStorageChanged={refreshStorageState}
+        onShowToast={showToast}
       />
 
       {/* Admin Creator Studio (1 to 100 slots, Dropbox Parser, GitHub Live Sync) */}

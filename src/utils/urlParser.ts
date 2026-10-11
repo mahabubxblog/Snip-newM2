@@ -16,7 +16,7 @@
 
 export interface NormalizedUrlResult {
   directUrl: string;
-  provider: 'github_release' | 'github_raw' | 'cloudinary' | 'supabase' | 'dropbox' | 'gdrive' | 'direct' | 'unsupported_social' | 'unknown';
+  provider: 'github_release' | 'github_raw' | 'catbox' | 'cloudinary' | 'supabase' | 'dropbox' | 'gdrive' | 'direct' | 'unsupported_social' | 'unknown';
   isValid: boolean;
   notes: string;
   originalUrl: string;
@@ -62,7 +62,6 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
     // Matches: https://github.com/{owner}/{repo}/releases/download/{tag}/{filename.mp4}
     if (hostLower.includes('github.com') && pathname.includes('/releases/download/')) {
       const fallbackUrls: string[] = [trimmed];
-      // objects.githubusercontent.com is where GitHub redirects release downloads with CORS
       return {
         directUrl: trimmed,
         provider: 'github_release',
@@ -70,6 +69,22 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
         notes: 'GitHub Releases হাই-স্পিড Fastly CDN লিংক শনাক্ত হয়েছে (সম্পূর্ণ ফ্রি, CORS সক্রিয়, বাফারিং-মুক্ত)।',
         originalUrl: trimmed,
         fallbackUrls,
+      };
+    }
+
+    // GITHUB USER ATTACHMENTS & OBJECTS CDN (often generated when uploading video via GitHub mobile/web UI)
+    if (
+      (hostLower.includes('github.com') && pathname.includes('/user-attachments/assets/')) ||
+      hostLower.includes('objects.githubusercontent.com') ||
+      hostLower.includes('github-production-user-asset')
+    ) {
+      return {
+        directUrl: trimmed,
+        provider: 'github_release',
+        isValid: true,
+        notes: 'GitHub User Attachment সরাসরি ভিডিও স্ট্রিম শনাক্ত হয়েছে (সম্পূর্ণ ফ্রি ও উচ্চগতির CDN)।',
+        originalUrl: trimmed,
+        fallbackUrls: [trimmed],
       };
     }
 
@@ -121,7 +136,20 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
       };
     }
 
-    // 3. CLOUDINARY MEDIA
+    // 3. CATBOX.MOE / LITTERBOX (BEST ZERO-CONFIG 100% FREE NO-ACCOUNT MEDIA HOST)
+    // Matches: https://files.catbox.moe/{filename.mp4} or https://litterbox.catbox.moe/{...}
+    if (hostLower.includes('catbox.moe')) {
+      return {
+        directUrl: trimmed,
+        provider: 'catbox',
+        isValid: true,
+        notes: 'Catbox.moe আল্ট্রা-ফাস্ট ভিডিও CDN শনাক্ত হয়েছে (১০০% ফ্রি, নো-লগইন, ফুল CORS ও বাফারিং-মুক্ত)।',
+        originalUrl: trimmed,
+        fallbackUrls: [trimmed],
+      };
+    }
+
+    // 4. CLOUDINARY MEDIA
     if (hostLower.includes('cloudinary.com')) {
       return {
         directUrl: trimmed,

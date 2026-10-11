@@ -449,3 +449,98 @@ export function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k));
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i] || 'B'}`;
 }
+
+export interface BatchDownloadProgress {
+  total: number;
+  completed: number;
+  currentTitle: string;
+  currentPercent: number;
+  successCount: number;
+  failCount: number;
+  isCancelled: boolean;
+}
+
+/**
+ * Batch download a queue of videos (e.g. 10, 20, 30, 40) into IndexedDB
+ */
+export async function batchDownloadVideos(
+  videos: VideoItem[],
+  alreadyDownloadedIds: Set<string>,
+  maxCount: number,
+  onProgress: (info: BatchDownloadProgress) => void,
+  signal?: AbortSignal
+): Promise<{ successCount: number; failCount: number }> {
+  const safeVideos = Array.isArray(videos) ? videos : [];
+  // Select un-downloaded videos
+  const toDownload = safeVideos
+    .filter((v) => !alreadyDownloadedIds.has(v.id))
+    .slice(0, maxCount);
+
+  if (toDownload.length === 0) {
+    return { successCount: 0, failCount: 0 };
+  }
+
+  let successCount = 0;
+  let failCount = 0;
+
+  for (let i = 0; i < toDownload.length; i++) {
+    if (signal?.aborted) {
+      onProgress({
+        total: toDownload.length,
+        completed: i,
+        currentTitle: 'ডাউনলোড বাতিল করা হয়েছে',
+        currentPercent: 0,
+        successCount,
+        failCount,
+        isCancelled: true,
+      });
+      break;
+    }
+
+    const video = toDownload[i];
+    onProgress({
+      total: toDownload.length,
+      completed: i,
+      currentTitle: video.title || `ভিডিও #${i + 1}`,
+      currentPercent: 5,
+      successCount,
+      failCount,
+      isCancelled: false,
+    });
+
+    try {
+      await downloadAndSaveVideo(
+        video,
+        (percent) => {
+          onProgress({
+            total: toDownload.length,
+            completed: i,
+            currentTitle: video.title || `ভিডিও #${i + 1}`,
+            currentPercent: percent,
+            successCount,
+            failCount,
+            isCancelled: false,
+          });
+        },
+        signal
+      );
+      successCount++;
+    } catch (err) {
+      if (signal?.aborted) break;
+      console.warn(`Failed batch download for video ${video.id}:`, err);
+      failCount++;
+    }
+
+    onProgress({
+      total: toDownload.length,
+      completed: i + 1,
+      currentTitle: video.title || `ভিডিও #${i + 1}`,
+      currentPercent: 100,
+      successCount,
+      failCount,
+      isCancelled: false,
+    });
+  }
+
+  return { successCount, failCount };
+}

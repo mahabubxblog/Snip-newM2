@@ -28,14 +28,25 @@ import {
   HelpCircle,
   Zap,
   ShieldCheck,
+  Cloud,
+  CloudUpload,
+  Server,
+  Globe,
 } from 'lucide-react';
-import { GitHubSyncConfig, VideoItem } from '../types';
+import { CloudSyncConfig, GitHubSyncConfig, VideoItem } from '../types';
 import { normalizeVideoUrl } from '../utils/urlParser';
 import {
   verifyGitHubRepo,
   commitVideosListToGitHub,
   fetchRemoteVideosFromGitHub,
 } from '../utils/githubSync';
+import {
+  getStoredCloudConfig,
+  saveCloudConfig,
+  fetchVideosFromCloud,
+  pushVideosToCloud,
+  testCloudEndpoint,
+} from '../utils/cloudSync';
 
 interface AdminStudioModalProps {
   isOpen: boolean;
@@ -63,8 +74,23 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
   const [passwordInput, setPasswordInput] = useState('');
   const [authError, setAuthError] = useState('');
 
-  // Active tab: 'list' | 'edit' | 'bulk' | 'github' | 'guide'
-  const [activeTab, setActiveTab] = useState<'list' | 'edit' | 'bulk' | 'github' | 'guide'>('list');
+  // Active tab: 'list' | 'edit' | 'bulk' | 'cloud' | 'github' | 'guide'
+  const [activeTab, setActiveTab] = useState<'list' | 'edit' | 'bulk' | 'cloud' | 'github' | 'guide'>('list');
+
+  // Cloud Sync state (Cloud JSON Bin & Built-in server)
+  const [cloudConfig, setCloudConfig] = useState<CloudSyncConfig>(() => getStoredCloudConfig());
+  const [isTestingCloud, setIsTestingCloud] = useState(false);
+  const [cloudTestResult, setCloudTestResult] = useState<{
+    success: boolean;
+    message: string;
+    videosCount?: number;
+  } | null>(null);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
+  const [cloudSyncResult, setCloudSyncResult] = useState<{
+    success: boolean;
+    message: string;
+    count?: number;
+  } | null>(null);
 
   // Bulk import state
   const [bulkUrlsText, setBulkUrlsText] = useState('');
@@ -273,6 +299,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(safeList);
     }
+    triggerCloudSync(safeList);
   };
 
   // Move video down in slot order
@@ -286,6 +313,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(safeList);
     }
+    triggerCloudSync(safeList);
   };
 
   // Save / Update video
@@ -354,6 +382,8 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
       triggerGitHubSync(updatedList);
     }
+    // Auto push to Cloud JSON Bin / server
+    triggerCloudSync(updatedList);
 
     setTimeout(() => {
       setActiveTab('list');
@@ -369,6 +399,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
         triggerGitHubSync(updatedList);
       }
+      triggerCloudSync(updatedList);
     }
   };
 
@@ -449,6 +480,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       if (githubConfig.token && githubConfig.owner && githubConfig.repo) {
         triggerGitHubSync(updatedList);
       }
+      triggerCloudSync(updatedList);
 
       setBulkImportMsg({
         type: 'success',
@@ -522,6 +554,72 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
       });
     } finally {
       setIsSyncingGh(false);
+    }
+  };
+
+  // Cloud Sync Handlers (JSONBin, npoint, and Express Server)
+  const handleTestCloudConnection = async () => {
+    setIsTestingCloud(true);
+    setCloudTestResult(null);
+    try {
+      saveCloudConfig(cloudConfig);
+      const res = await testCloudEndpoint(cloudConfig);
+      setCloudTestResult(res);
+    } catch (err) {
+      setCloudTestResult({
+        success: false,
+        message: 'কানেকশন পরীক্ষা ব্যর্থ: ' + String(err),
+      });
+    } finally {
+      setIsTestingCloud(false);
+    }
+  };
+
+  const triggerCloudSync = async (listToPush = videos) => {
+    setIsSyncingCloud(true);
+    setCloudSyncResult(null);
+    try {
+      saveCloudConfig(cloudConfig);
+      const res = await pushVideosToCloud(listToPush, cloudConfig, 'Ma44332211');
+      setCloudSyncResult(res);
+      if (res.success) {
+        setCloudConfig((prev) => ({ ...prev, lastSyncedAt: new Date().toISOString() }));
+      }
+    } catch (err) {
+      setCloudSyncResult({
+        success: false,
+        message: 'ক্লাউড সিঙ্ক করতে ব্যর্থ: ' + String(err),
+      });
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
+  const handlePullFromCloud = async () => {
+    setIsSyncingCloud(true);
+    setCloudSyncResult(null);
+    try {
+      const res = await fetchVideosFromCloud(cloudConfig);
+      if (res.success && Array.isArray(res.videos) && res.videos.length > 0) {
+        await onSaveVideos(res.videos, `ক্লাউড থেকে ${res.videos.length}টি ভিডিও অ্যাপে সিঙ্ক করা হয়েছে!`);
+        setCloudSyncResult({
+          success: true,
+          message: `সফলভাবে ${res.videos.length}টি ভিডিও ক্লাউড থেকে অ্যাপে আপডেট করা হয়েছে!`,
+          count: res.videos.length,
+        });
+      } else {
+        setCloudSyncResult({
+          success: false,
+          message: res.message || 'ক্লাউডে কোনো ভিডিও পাওয়া যায়নি',
+        });
+      }
+    } catch (err) {
+      setCloudSyncResult({
+        success: false,
+        message: 'ক্লাউড থেকে পুল করতে ব্যর্থ: ' + String(err),
+      });
+    } finally {
+      setIsSyncingCloud(false);
     }
   };
 
@@ -716,6 +814,25 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
               </button>
 
               <button
+                onClick={() => {
+                  setActiveTab('cloud');
+                  setCloudSyncResult(null);
+                  setCloudTestResult(null);
+                }}
+                className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
+                  activeTab === 'cloud'
+                    ? 'border-rose-500 text-rose-400 bg-zinc-900/80'
+                    : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                <Cloud className="w-4 h-4 text-cyan-400" />
+                ক্লাউড JSON Bin সিঙ্ক
+                <span className="text-[9px] px-1.5 py-0.2 bg-cyan-500/20 text-cyan-300 rounded font-semibold">
+                  EASY FREE
+                </span>
+              </button>
+
+              <button
                 onClick={() => setActiveTab('guide')}
                 className={`flex items-center gap-2 px-4 py-2.5 text-xs font-semibold rounded-t-xl transition border-b-2 cursor-pointer min-h-[44px] shrink-0 ${
                   activeTab === 'guide'
@@ -862,13 +979,13 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                 {/* Video URL Input */}
                 <div>
                   <label className="block text-xs font-semibold text-zinc-300 mb-1 flex items-center justify-between">
-                    <span>ভিডিও লিংক (GitHub Releases / Cloudinary / Dropbox / MP4 URL) *</span>
+                    <span>ভিডিও লিংক (Catbox / GitHub Releases / Cloudinary / MP4 URL) *</span>
                     <span className="text-rose-400 font-mono text-[11px]">Auto CORS Normalization</span>
                   </label>
                   <div className="relative">
                     <input
                       type="url"
-                      placeholder="https://github.com/mahabubxblog/Snip-newM2/releases/download/.../video.mp4"
+                      placeholder="https://files.catbox.moe/abc123.mp4 বা GitHub বা Cloudinary লিংক..."
                       value={formData.url}
                       onChange={(e) => setFormData({ ...formData, url: e.target.value })}
                       className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-700 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-rose-500 font-mono min-h-[44px]"
@@ -877,7 +994,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   </div>
 
                   <div className="mt-1.5 flex flex-wrap items-center justify-between text-[11px] text-zinc-400 gap-1">
-                    <span>💡 সেরা পদ্ধতি: <strong>GitHub Releases</strong> এ আপলোড করে লিংক দিন (১০০% ফ্রি, বাফারিং-মুক্ত)।</span>
+                    <span>💡 সবচেয়ে সহজ: <strong className="text-emerald-400">Catbox.moe</strong> (নো একাউন্ট, ১-ক্লিক মোবাইল আপলোড) অথবা <strong>GitHub</strong> / <strong>Cloudinary</strong></span>
                     <button
                       type="button"
                       onClick={() => setActiveTab('guide')}
@@ -1058,7 +1175,7 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                     <span>একসাথে একাধিক ভিডিও যোগ করুন (Bulk Video Importer)</span>
                   </div>
                   <p className="text-xs text-zinc-300 leading-relaxed">
-                    GitHub Releases বা অন্য যেকোনো হোস্ট থেকে আপলোড করা ভিডিওগুলোর লিংক নিচে পেস্ট করুন (প্রতি লাইনে একটি করে লিংক)। সিস্টেম স্বয়ংক্রিয়ভাবে ভিডিও নাম ও লিংক পরীক্ষা করে এক ক্লিকে ফিডে যুক্ত করে দেবে!
+                    <strong>Catbox.moe</strong> বা <strong>GitHub Releases</strong> থেকে আপলোড করা ভিডিওগুলোর লিংক নিচে পেস্ট করুন (প্রতি লাইনে একটি করে লিংক)। আপনার শুধু লিংক দিলেই হবে—সিস্টেম স্বয়ংক্রিয়ভাবে ভিডিও নাম ও লিংক পরীক্ষা করে এক ক্লিকে ফিডে যুক্ত করে দেবে এবং লাইভ সেভ করে দেবে!
                   </p>
                 </div>
 
@@ -1137,24 +1254,37 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                     <label className="text-xs font-semibold text-zinc-300 flex items-center gap-1.5">
                       <span>ভিডিও লিংকসমূহ পেস্ট করুন (প্রতি লাইনে ১টি লিংক):</span>
                     </label>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setBulkUrlsText(
-                          `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4`
-                        );
-                      }}
-                      className="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
-                    >
-                      নমুনা লিংক দিয়ে দেখুন
-                    </button>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkUrlsText(
+                            `https://files.catbox.moe/sample1.mp4\nhttps://files.catbox.moe/sample2.mp4\nhttps://files.catbox.moe/sample3.mp4`
+                          );
+                        }}
+                        className="text-[11px] text-emerald-400 hover:text-emerald-300 underline cursor-pointer"
+                      >
+                        Catbox নমুনা লিংক
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setBulkUrlsText(
+                            `https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerEscapes.mp4\nhttps://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerFun.mp4`
+                          );
+                        }}
+                        className="text-[11px] text-amber-400 hover:text-amber-300 underline cursor-pointer"
+                      >
+                        গুগল নমুনা লিংক
+                      </button>
+                    </div>
                   </div>
 
                   <textarea
                     rows={6}
                     value={bulkUrlsText}
                     onChange={(e) => setBulkUrlsText(e.target.value)}
-                    placeholder={`https://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-01.mp4\nhttps://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-02.mp4\nhttps://github.com/${githubConfig.owner}/${githubConfig.repo}/releases/download/v1.0.0/video-03.mp4`}
+                    placeholder={`https://files.catbox.moe/example1.mp4\nhttps://files.catbox.moe/example2.mp4\nhttps://files.catbox.moe/example3.mp4`}
                     className="w-full p-3 bg-zinc-950 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-600 font-mono focus:outline-none focus:border-amber-500 leading-relaxed"
                   />
                 </div>
@@ -1342,6 +1472,60 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                   </div>
                 </div>
 
+                {/* METHOD 0: CATBOX.MOE (EASIEST NO-LOGIN MOBILE UPLOAD) */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-gradient-to-br from-amber-950/40 via-zinc-950/90 to-zinc-950 border border-amber-500/40 space-y-3.5 shadow-xl">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-amber-500/20 text-amber-400 flex items-center justify-center font-bold">
+                        ★
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm text-white flex items-center gap-2">
+                          <span>Catbox.moe (সবচেয়ে সহজ — নো লগইন, ৩ সেকেন্ডে মোবাইল আপলোড)</span>
+                        </h4>
+                        <span className="text-[11px] text-amber-400/90 font-medium">কোনো একাউন্ট বা কোডিং লাগবে না • ১০০% চিরস্থায়ী ফ্রি</span>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-1 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-300 text-[10px] font-bold uppercase tracking-wider">
+                      EASIEST FOR MOBILE
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    আপনার যদি GitHub বা অন্য কোনো সাইট কঠিন মনে হয়, তবে <strong>Catbox.moe</strong> হলো এই মুহূর্তে সবচেয়ে সহজ উপায়। কোনো সাইন-আপ, ইমেইল বা পাসওয়ার্ড ছাড়া সরাসরি ফোন গ্যালারি থেকে ভিডিও আপলোড করা যায় এবং এটি সরাসরি Fastly CDN দিয়ে চিরস্থায়ীভাবে ভিডিও স্ট্রিম করে (কোনো দিন এক্সপায়ার হবে না)।
+                  </p>
+
+                  <div className="p-3 bg-zinc-900/90 rounded-xl border border-zinc-800 space-y-2">
+                    <p className="font-semibold text-white text-xs">মোবাইল থেকে আপলোড করার মাত্র ৩টি সহজ ধাপ:</p>
+                    <div className="space-y-1.5 text-xs text-zinc-300 pl-1">
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-amber-400 font-bold">১.</span>
+                        <div>
+                          <span>ক্রোম ব্রাউজারে </span>
+                          <a
+                            href="https://catbox.moe"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-amber-400 underline font-semibold ml-1 mr-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            catbox.moe ওপেন করুন
+                          </a>
+                          <span className="text-zinc-400">(কোনো অ্যাকাউন্ট খোলা লাগবে না)।</span>
+                        </div>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-amber-400 font-bold">২.</span>
+                        <span><strong>"Select or drop files"</strong> বাটনে ক্লিক করে ফোনের গ্যালারি থেকে আপনার ভিডিও (.mp4) সিলেক্ট করুন এবং <strong>"Upload"</strong> চাপুন (সর্বোচ্চ ২০০ মেগাবাইট পর্যন্ত)।</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="font-mono text-amber-400 font-bold">৩.</span>
+                        <span>২-৩ সেকেন্ড পর নিচে সবুজ রঙের লিংক আসবে (যেমন: <code className="text-amber-300 bg-zinc-800 px-1 py-0.5 rounded font-mono text-[11px]">https://files.catbox.moe/abc123.mp4</code>)। লিংকটি কপি করে SnipTok অ্যাডমিনে পেস্ট করে দিন!</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
                 {/* METHOD 1: GITHUB RELEASES (THE ULTIMATE FREE SOLUTION) */}
                 <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/90 border border-emerald-500/30 space-y-3.5">
                   <div className="flex items-center justify-between">
@@ -1508,6 +1692,280 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
                     </p>
                   </div>
                 </div>
+              </div>
+            )}
+
+            {/* TAB: CLOUD JSON BIN LIVE SYNC */}
+            {activeTab === 'cloud' && (
+              <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-5 no-scrollbar">
+                {/* Intro Card */}
+                <div className="p-4 sm:p-5 rounded-2xl bg-zinc-950/80 border border-cyan-500/30 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-xl bg-cyan-500/20 text-cyan-400 flex items-center justify-center font-bold">
+                        <Cloud className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <h4 className="font-bold text-sm text-white">
+                          ক্লাউড JSON Bin লাইভ সিঙ্ক (Cross-Device Live Database)
+                        </h4>
+                        <p className="text-[11px] text-zinc-400">১০০% ফ্রি ও ইনস্ট্যান্ট সিঙ্ক — সকল ফোনে অটো আপডেট</p>
+                      </div>
+                    </div>
+                    <span className="px-2.5 py-0.5 rounded-full bg-cyan-500/20 text-cyan-300 text-[10px] font-bold">
+                      RECOMMENDED
+                    </span>
+                  </div>
+
+                  <p className="text-xs text-zinc-300 leading-relaxed">
+                    এই ফিচারের মাধ্যমে আপনি যেকোনো ফোন থেকে ভিডিও যোগ, এডিট বা ডিলিট করলে অন্য সকল দর্শকের ফোনে কয়েক সেকেন্ডের মধ্যে স্বয়ংক্রিয়ভাবে আপডেট চলে আসবে। কোনো গিটহাব টোকেন সমস্যা বা রেট-লিমিটের ভয় নেই।
+                  </p>
+                </div>
+
+                {/* Provider Selector */}
+                <div className="space-y-2">
+                  <label className="block text-xs font-bold text-zinc-300">
+                    ক্লাউড প্রোভাইডার নির্বাচন করুন:
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setCloudConfig((prev) => ({ ...prev, provider: 'server' }))}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                        cloudConfig.provider === 'server'
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-md'
+                          : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Server className="w-4 h-4" />
+                      <span>লাইভ সার্ভার (/api)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCloudConfig((prev) => ({ ...prev, provider: 'npoint' }))}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                        cloudConfig.provider === 'npoint'
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-md'
+                          : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <Globe className="w-4 h-4" />
+                      <span>npoint.io (ফ্রি বিন)</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCloudConfig((prev) => ({ ...prev, provider: 'jsonbin' }))}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                        cloudConfig.provider === 'jsonbin'
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-md'
+                          : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <CloudUpload className="w-4 h-4" />
+                      <span>JSONBin.io</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setCloudConfig((prev) => ({ ...prev, provider: 'custom' }))}
+                      className={`min-h-[44px] p-2.5 rounded-xl border text-xs font-semibold flex flex-col items-center justify-center gap-1 transition cursor-pointer ${
+                        cloudConfig.provider === 'custom'
+                          ? 'bg-cyan-500/20 border-cyan-500 text-cyan-300 shadow-md'
+                          : 'bg-zinc-800/60 border-zinc-700/60 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      <span>কাস্টম JSON URL</span>
+                    </button>
+                  </div>
+                </div>
+
+                {/* Provider Form Fields */}
+                <div className="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800 space-y-3.5">
+                  {cloudConfig.provider === 'server' && (
+                    <div className="space-y-2 text-xs text-zinc-300">
+                      <div className="flex items-center gap-2 text-emerald-400 font-semibold">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span>জিরো সেটআপ: SnipTok ব্যাকএন্ড সার্ভার সক্রিয়!</span>
+                      </div>
+                      <p className="text-zinc-400 leading-relaxed">
+                        কোনো বাড়তি বিন আইডি বা টোকেনের প্রয়োজন নেই। অ্যাডমিন প্যানেল থেকে ভিডিও সেভ করলে সরাসরি ব্যাকএন্ড সার্ভারে সেভ হবে এবং পৃথিবীর যেকোনো ডিভাইসের ব্যবহারকারীরা তাৎক্ষণিক ভিডিওর তালিকা পেয়ে যাবে।
+                      </p>
+                    </div>
+                  )}
+
+                  {cloudConfig.provider === 'npoint' && (
+                    <div className="space-y-3 text-xs">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="font-semibold text-zinc-200">npoint.io বিন আইডি (Bin ID)</label>
+                          <a
+                            href="https://www.npoint.io"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-cyan-400 hover:underline flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            npoint.io তে ফ্রি বিন খুলুন
+                          </a>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="যেমন: c0e86b3a2f91d (বা সম্পূর্ণ https://api.npoint.io/... লিঙ্ক)"
+                          value={cloudConfig.binId}
+                          onChange={(e) => setCloudConfig((prev) => ({ ...prev, binId: e.target.value }))}
+                          className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 min-h-[44px]"
+                        />
+                      </div>
+                      <p className="text-[11px] text-zinc-400">
+                        💡 <strong>সহজ নিয়ম:</strong> <a href="https://www.npoint.io" target="_blank" rel="noopener noreferrer" className="text-cyan-400 underline">npoint.io</a> এ গিয়ে <code>Create</code> এ চাপুন এবং তৈরি হওয়া বিনের কোডটি এখানে দিন।
+                      </p>
+                    </div>
+                  )}
+
+                  {cloudConfig.provider === 'jsonbin' && (
+                    <div className="space-y-3 text-xs">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="font-semibold text-zinc-200">JSONBin Bin ID</label>
+                          <a
+                            href="https://jsonbin.io"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-[11px] text-cyan-400 hover:underline flex items-center gap-1"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            jsonbin.io খুলুন
+                          </a>
+                        </div>
+                        <input
+                          type="text"
+                          placeholder="যেমন: 67583a21..."
+                          value={cloudConfig.binId}
+                          onChange={(e) => setCloudConfig((prev) => ({ ...prev, binId: e.target.value }))}
+                          className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 min-h-[44px]"
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-semibold text-zinc-200 mb-1">
+                          Master-Key (API Key - লেখার অনুমতির জন্য)
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="$2a$10$..."
+                          value={cloudConfig.apiKey || ''}
+                          onChange={(e) => setCloudConfig((prev) => ({ ...prev, apiKey: e.target.value }))}
+                          className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 min-h-[44px]"
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {cloudConfig.provider === 'custom' && (
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-zinc-200">
+                        কাস্টম ক্লাউড JSON এন্ডপয়েন্ট URL
+                      </label>
+                      <input
+                        type="url"
+                        placeholder="https://example.com/api/my-videos.json"
+                        value={cloudConfig.customUrl || ''}
+                        onChange={(e) => setCloudConfig((prev) => ({ ...prev, customUrl: e.target.value }))}
+                        className="w-full px-3.5 py-2.5 bg-zinc-900 border border-zinc-700 rounded-xl text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-cyan-500 min-h-[44px]"
+                      />
+                    </div>
+                  )}
+
+                  {/* Auto Sync Toggle */}
+                  <label className="flex items-center gap-2 pt-1 text-xs text-zinc-300 cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={cloudConfig.autoSync}
+                      onChange={(e) => setCloudConfig((prev) => ({ ...prev, autoSync: e.target.checked }))}
+                      className="rounded border-zinc-700 text-rose-600 focus:ring-0 w-4 h-4 cursor-pointer"
+                    />
+                    <span>ভিডিও যোগ বা পরিবর্তন করার পর স্বয়ংক্রিয়ভাবে ক্লাউডে পুশ করুন (Auto-Sync)</span>
+                  </label>
+                </div>
+
+                {/* Cloud Action Buttons */}
+                <div className="flex flex-col sm:flex-row items-center gap-2.5">
+                  <button
+                    type="button"
+                    onClick={handleTestCloudConnection}
+                    disabled={isTestingCloud}
+                    className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 transition cursor-pointer min-h-[44px]"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${isTestingCloud ? 'animate-spin' : ''}`} />
+                    {isTestingCloud ? 'পরীক্ষা করা হচ্ছে...' : '🔍 সংযোগ পরীক্ষা করুন (Test)'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => triggerCloudSync(videos)}
+                    disabled={isSyncingCloud}
+                    className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-cyan-600/30 transition cursor-pointer min-h-[44px]"
+                  >
+                    <CloudUpload className="w-4 h-4" />
+                    {isSyncingCloud ? 'সিঙ্ক হচ্ছে...' : '⬆️ ক্লাউডে সব সেভ করুন (Push)'}
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handlePullFromCloud}
+                    disabled={isSyncingCloud}
+                    className="w-full sm:w-auto flex-1 flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 transition cursor-pointer min-h-[44px]"
+                  >
+                    <CloudDownload className="w-4 h-4" />
+                    ⬇️ ক্লাউড থেকে নামান (Pull)
+                  </button>
+                </div>
+
+                {/* Feedback Alerts */}
+                {cloudTestResult && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+                      cloudTestResult.success
+                        ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-200'
+                        : 'bg-red-950/60 border-red-500/50 text-red-200'
+                    }`}
+                  >
+                    {cloudTestResult.success ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                    )}
+                    <div>
+                      <p className="font-semibold">{cloudTestResult.message}</p>
+                    </div>
+                  </div>
+                )}
+
+                {cloudSyncResult && (
+                  <div
+                    className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+                      cloudSyncResult.success
+                        ? 'bg-emerald-950/60 border-emerald-500/50 text-emerald-200'
+                        : 'bg-red-950/60 border-red-500/50 text-red-200'
+                    }`}
+                  >
+                    {cloudSyncResult.success ? (
+                      <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-400 mt-0.5" />
+                    ) : (
+                      <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                    )}
+                    <div>
+                      <p className="font-semibold">{cloudSyncResult.message}</p>
+                      {cloudConfig.lastSyncedAt && (
+                        <p className="text-[10px] text-zinc-400 mt-1">
+                          সর্বশেষ সিঙ্ক: {new Date(cloudConfig.lastSyncedAt).toLocaleTimeString('bn-BD')}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </div>
             )}
 
