@@ -56,12 +56,16 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const scrollRafRef = useRef<number | null>(null);
+  const touchStartYRef = useRef<number | null>(null);
+  const touchStartXRef = useRef<number | null>(null);
+
   const [isMuted, setIsMuted] = useState<boolean>(true); // Start muted per web autoplay policy
   const [isAutoAdvance, setIsAutoAdvance] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('sniptok_auto_advance') === 'true';
+      const saved = localStorage.getItem('sniptok_auto_advance');
+      return saved !== null ? saved === 'true' : true; // Default to true for automatic loops
     } catch {
-      return false;
+      return true;
     }
   });
 
@@ -82,12 +86,12 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 
   // Prevent out of bounds index if list size drops
   useEffect(() => {
-    if (safeVideos.length > 0 && activeIndex > safeVideos.length) {
+    if (safeVideos.length > 0 && activeIndex >= safeVideos.length) {
       setActiveIndex(Math.max(0, safeVideos.length - 1));
     }
   }, [safeVideos.length, activeIndex, setActiveIndex]);
 
-  // Throttled scroll listener via requestAnimationFrame to avoid rapid thrashing
+  // Throttled scroll listener via requestAnimationFrame
   const handleScroll = useCallback(() => {
     if (scrollRafRef.current !== null) return;
 
@@ -101,10 +105,10 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 
       const scrollTop = container.scrollTop;
       const newIndex = Math.round(scrollTop / height);
-      // Support index up to safeVideos.length for the End-of-Feed Loop card
-      const clampedIndex = Math.max(0, Math.min(safeVideos.length, newIndex));
+      const maxIdx = Math.max(0, safeVideos.length - 1);
+      const clampedIndex = Math.max(0, Math.min(maxIdx, newIndex));
 
-      if (clampedIndex !== activeIndex && (safeVideos.length > 0 || clampedIndex === 0)) {
+      if (clampedIndex !== activeIndex) {
         setActiveIndex(clampedIndex);
       }
     });
@@ -112,7 +116,7 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
 
   // Auto-advance callback when video playback finishes: loops back from last video to 1st video
   const handleVideoEnded = useCallback(() => {
-    if (safeVideos.length <= 1) return;
+    if (safeVideos.length <= 0) return;
     const next = (activeIndex + 1) % safeVideos.length;
     setActiveIndex(next);
     const container = containerRef.current;
@@ -121,6 +125,74 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
       container.scrollTo({ top: next * height, behavior: 'smooth' });
     }
   }, [safeVideos.length, activeIndex, setActiveIndex]);
+
+  // Mobile Touch Swipe Handling for seamless circular loop
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (e.touches.length > 0) {
+      touchStartYRef.current = e.touches[0].clientY;
+      touchStartXRef.current = e.touches[0].clientX;
+    }
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    if (touchStartYRef.current === null || safeVideos.length <= 1) return;
+    const touchEndY = e.changedTouches[0]?.clientY;
+    const touchEndX = e.changedTouches[0]?.clientX;
+    if (touchEndY === undefined) return;
+
+    const deltaY = touchStartYRef.current - touchEndY; // > 0 means swiped UP (next)
+    const deltaX = Math.abs((touchStartXRef.current || 0) - (touchEndX || 0));
+
+    // Detect intentional vertical swipe (> 45px)
+    if (deltaY > 45 && deltaY > deltaX) {
+      // User swiped UP to see the next video
+      if (activeIndex >= safeVideos.length - 1) {
+        // At the last video -> seamlessly loop back to 1st video
+        const container = containerRef.current;
+        if (container) {
+          container.scrollTo({ top: 0, behavior: 'smooth' });
+          setActiveIndex(0);
+        }
+      }
+    } else if (deltaY < -45 && Math.abs(deltaY) > deltaX) {
+      // User swiped DOWN on the first video -> wrap to last video
+      if (activeIndex === 0) {
+        const container = containerRef.current;
+        if (container) {
+          const height = container.clientHeight;
+          const lastIdx = safeVideos.length - 1;
+          container.scrollTo({ top: lastIdx * height, behavior: 'smooth' });
+          setActiveIndex(lastIdx);
+        }
+      }
+    }
+
+    touchStartYRef.current = null;
+    touchStartXRef.current = null;
+  };
+
+  // Wheel handling for desktop mouse scroll past boundaries
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+    if (safeVideos.length <= 1) return;
+    const container = containerRef.current;
+    if (!container) return;
+
+    if (e.deltaY > 40 && activeIndex >= safeVideos.length - 1) {
+      const isAtBottom = container.scrollTop + container.clientHeight >= container.scrollHeight - 10;
+      if (isAtBottom) {
+        container.scrollTo({ top: 0, behavior: 'smooth' });
+        setActiveIndex(0);
+      }
+    } else if (e.deltaY < -40 && activeIndex === 0) {
+      const isAtTop = container.scrollTop <= 5;
+      if (isAtTop) {
+        const height = container.clientHeight;
+        const lastIdx = safeVideos.length - 1;
+        container.scrollTo({ top: lastIdx * height, behavior: 'smooth' });
+        setActiveIndex(lastIdx);
+      }
+    }
+  };
 
   // Clean up RAF on unmount
   useEffect(() => {
@@ -360,6 +432,9 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
         <div
           ref={containerRef}
           onScroll={handleScroll}
+          onTouchStart={handleTouchStart}
+          onTouchEnd={handleTouchEnd}
+          onWheel={handleWheel}
           className="flex-1 w-full h-full snap-container overflow-y-scroll no-scrollbar"
         >
           {safeVideos.map((video, idx) => {
@@ -400,48 +475,6 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
               </div>
             );
           })}
-
-          {/* LOOP END CARD: যখন ব্যবহারকারী ফিডের সব ভিডিও দেখে ফেলবে */}
-          {safeVideos.length > 0 && (
-            <div className="w-full h-full snap-item relative bg-gradient-to-b from-zinc-950 via-zinc-900 to-black flex flex-col items-center justify-center p-6 text-center select-none">
-              <div className="max-w-sm w-full p-6 sm:p-7 rounded-3xl bg-zinc-900/95 border border-zinc-800/80 shadow-2xl backdrop-blur-xl flex flex-col items-center">
-                <div className="w-16 h-16 rounded-2xl bg-rose-500/10 border border-rose-500/20 text-rose-500 flex items-center justify-center mb-4 shadow-lg shadow-rose-500/10">
-                  <RotateCcw className="w-8 h-8" />
-                </div>
-
-                <h3 className="text-xl font-bold text-white mb-1.5">
-                  সব ভিডিও দেখা শেষ! 🎉
-                </h3>
-                <p className="text-xs text-zinc-400 mb-6 leading-relaxed">
-                  আপনি ফিডের মোট <strong className="text-white font-mono">{safeVideos.length}টি</strong> ভিডিওর সবগুলো উপভোগ করেছেন।
-                </p>
-
-                <div className="flex flex-col gap-2.5 w-full">
-                  <button
-                    onClick={() => {
-                      setActiveIndex(0);
-                      const container = containerRef.current;
-                      if (container) {
-                        container.scrollTo({ top: 0, behavior: 'smooth' });
-                      }
-                    }}
-                    className="w-full py-3.5 px-5 bg-gradient-to-r from-rose-600 to-rose-500 hover:from-rose-500 hover:to-rose-400 text-white rounded-2xl text-sm font-bold shadow-lg shadow-rose-600/30 flex items-center justify-center gap-2 cursor-pointer active:scale-95 transition min-h-[44px]"
-                  >
-                    <RotateCcw className="w-4 h-4" />
-                    আবার ১ম ভিডিও থেকে শুরু করুন (Loop Feed)
-                  </button>
-
-                  <button
-                    onClick={onOpenStorageModal}
-                    className="w-full py-3 px-5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white rounded-2xl text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer transition min-h-[40px]"
-                  >
-                    <HardDrive className="w-4 h-4 text-emerald-400" />
-                    অফলাইনে সেভ করুন ({offlineVideosCount} টি সেভ করা)
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
