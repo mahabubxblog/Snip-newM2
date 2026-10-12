@@ -34,7 +34,10 @@ export function normalizeVideoUrl(rawInput: string): NormalizedUrlResult {
     };
   }
 
-  const trimmed = rawInput.trim();
+  let trimmed = rawInput.trim();
+  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://')) {
+    trimmed = 'https://' + trimmed;
+  }
 
   try {
     const parsed = new URL(trimmed);
@@ -364,6 +367,13 @@ export function getAlternativeVideoUrls(url: string): string[] {
         result.push(`https://raw.githubusercontent.com/${repoPath}/${branch}/${filePath}`);
         result.push(`https://cdn.jsdelivr.net/gh/${repoPath}@${branch}/${filePath}`);
       }
+    }
+
+    // Direct / Catbox / WebM fallback: retry with cache-bust parameter if primary stalls
+    if (hostLower.includes('catbox.moe') || parsed.pathname.match(/\.(mp4|webm|mov|m4v)$/i)) {
+      const retryUrl = new URL(url);
+      retryUrl.searchParams.set('_r', '1');
+      result.push(retryUrl.toString());
     }
   } catch {
     // ignore

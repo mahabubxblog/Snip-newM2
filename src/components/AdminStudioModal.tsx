@@ -418,7 +418,8 @@ export const AdminStudioModal: React.FC<AdminStudioModalProps> = ({
     const lines = bulkUrlsText
       .split(/[\r\n]+/)
       .map((l) => l.trim())
-      .filter((l) => l.length > 5 && (l.startsWith('http://') || l.startsWith('https://') || l.startsWith('/')));
+      .filter((l) => l.length > 3)
+      .map((l) => (!l.startsWith('http://') && !l.startsWith('https://') && !l.startsWith('/') ? 'https://' + l : l));
 
     return lines.map((line, idx) => {
       const parsed = normalizeVideoUrl(line);

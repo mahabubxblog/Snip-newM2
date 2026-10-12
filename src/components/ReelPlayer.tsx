@@ -110,12 +110,16 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
   const lastTapRef = useRef<number>(0);
   const clickTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartTimerMapRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const autoSkipTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Cleanup all timers on unmount
   useEffect(() => {
     return () => {
       if (clickTimeoutRef.current) {
         clearTimeout(clickTimeoutRef.current);
+      }
+      if (autoSkipTimerRef.current) {
+        clearTimeout(autoSkipTimerRef.current);
       }
       heartTimerMapRef.current.forEach((timer) => clearTimeout(timer));
       heartTimerMapRef.current.clear();
@@ -163,8 +167,14 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
     const el = videoRef.current;
     if (!el) return;
 
+    if (autoSkipTimerRef.current) {
+      clearTimeout(autoSkipTimerRef.current);
+      autoSkipTimerRef.current = null;
+    }
+
     if (isActive) {
       setVideoError(null);
+      el.currentTime = 0;
       attemptPlayback(el, isMuted);
     } else {
       el.pause();
@@ -198,13 +208,13 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
   };
   const handleCanPlay = () => setIsBuffering(false);
 
-  // Video Error Handler with automatic fallback cycling and detailed diagnosis
+  // Video Error Handler with automatic fallback cycling and seamless loop auto-skip
   const handleVideoError = () => {
     const el = videoRef.current;
     setIsBuffering(false);
     setIsPlaying(false);
 
-    // If another candidate URL exists (e.g. dl=1 instead of raw=1 or direct), try it automatically!
+    // If another candidate URL exists, try it automatically!
     if (currentUrlIndex + 1 < candidateUrls.length) {
       console.log(`Primary URL failed, auto-trying fallback ${currentUrlIndex + 1}/${candidateUrls.length}`);
       setCurrentUrlIndex((prev) => prev + 1);
@@ -212,33 +222,30 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
       return;
     }
 
-    let errorDetail = 'ভিডিওটি লোড করা যাচ্ছে না।';
-    if (el?.error) {
-      switch (el.error.code) {
-        case MediaError.MEDIA_ERR_NETWORK:
-          errorDetail = 'নেটওয়ার্ক সংযোগ ত্রুটি। ইন্টারনেট বা ড্রপবক্স ব্যান্ডউইথ চেক করুন।';
-          break;
-        case MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED:
-          errorDetail = 'ভিডিও ফরম্যাট বা CORS স্ট্রিম সাপোর্ট করছে না। ড্রপবক্স লিংকটি "Anyone with link can view" শেয়ার করা কিনা এবং Brave Shields চেক করুন।';
-          break;
-        case MediaError.MEDIA_ERR_DECODE:
-          errorDetail = 'ভিডিও ডিকোড ত্রুটি হয়েছে।';
-          break;
-        default:
-          errorDetail = 'মিডিয়া স্ট্রিম লোড করতে সমস্যা হয়েছে।';
+    setVideoError('ভিডিও লোড হয়নি — স্বয়ংক্রিয়ভাবে পরবর্তী ভিডিওতে যাওয়া হচ্ছে...');
+
+    // Auto-advance skip: seamlessly jump to next video in the loop so playback never freezes
+    if (isActive && isAutoAdvance && onEnded) {
+      if (autoSkipTimerRef.current) {
+        clearTimeout(autoSkipTimerRef.current);
       }
+      autoSkipTimerRef.current = setTimeout(() => {
+        onEnded();
+      }, 1200);
     }
-    setVideoError(errorDetail);
   };
 
   // Manual Retry
-  const handleRetryLoad = (e: React.MouseEvent) => {
-    e.stopPropagation();
+  const handleRetryLoad = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (autoSkipTimerRef.current) {
+      clearTimeout(autoSkipTimerRef.current);
+      autoSkipTimerRef.current = null;
+    }
     const el = videoRef.current;
     if (el) {
       setVideoError(null);
       setIsBuffering(true);
-      // Reset back to primary candidate or next
       setCurrentUrlIndex(0);
       el.load();
       attemptPlayback(el, isMuted);
@@ -415,53 +422,48 @@ export const ReelPlayer: React.FC<ReelPlayerProps> = ({
         </div>
       )}
 
-      {/* Video Error Overlay */}
+      {/* Non-intrusive Floating Auto-Skip Error Pill (never blocks the screen or playlist loop) */}
       {videoError && isActive && (
         <div
-          className="absolute inset-0 z-30 bg-black/90 backdrop-blur-md flex flex-col items-center justify-center p-6 text-center text-zinc-200"
+          className="absolute bottom-24 left-4 right-4 sm:left-auto sm:right-6 sm:max-w-sm z-30 flex items-center justify-between gap-3 p-3 bg-zinc-900/95 border border-zinc-700/80 rounded-2xl shadow-2xl backdrop-blur-md text-xs text-zinc-200 animate-in fade-in slide-in-from-bottom-2"
           onClick={(e) => e.stopPropagation()}
         >
-          <div className="p-3 bg-red-500/10 text-red-400 rounded-2xl border border-red-500/20 mb-3">
-            <AlertTriangle className="w-8 h-8" />
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 rounded-xl bg-amber-500/20 flex items-center justify-center shrink-0">
+              <AlertTriangle className="w-4 h-4 text-amber-400" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-[11px] font-semibold text-zinc-200 truncate">
+                {isAutoAdvance ? 'ভিডিও লোড হয়নি — পরবর্তী ভিডিওতে যাওয়া হচ্ছে...' : 'ভিডিওটি লোড করা যায়নি'}
+              </p>
+              <p className="text-[10px] text-zinc-400 truncate">
+                {video.title}
+              </p>
+            </div>
           </div>
-          <h3 className="text-base font-bold text-white mb-1">ভিডিও প্লে করতে ব্যর্থ</h3>
-          <p className="text-xs text-zinc-400 max-w-xs mb-4 leading-relaxed">{videoError}</p>
 
-          <div className="flex flex-col sm:flex-row items-center gap-2 w-full max-w-xs">
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onEnded && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (autoSkipTimerRef.current) clearTimeout(autoSkipTimerRef.current);
+                  onEnded();
+                }}
+                className="px-2.5 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl font-bold text-[10px] transition cursor-pointer active:scale-95"
+              >
+                পরেরটি &rarr;
+              </button>
+            )}
             <button
+              type="button"
               onClick={handleRetryLoad}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-rose-600/30 transition cursor-pointer active:scale-95 min-h-[42px]"
+              className="p-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-xl transition cursor-pointer active:scale-95"
+              title="আবার চেষ্টা করুন"
             >
-              <RotateCcw className="w-4 h-4" />
-              আবার চেষ্টা করুন (Retry)
+              <RotateCcw className="w-3.5 h-3.5" />
             </button>
-
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onDownload(video);
-              }}
-              disabled={isDownloading || isDownloaded}
-              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-200 rounded-xl text-xs font-semibold border border-zinc-700 transition cursor-pointer active:scale-95 min-h-[42px]"
-            >
-              <Download className="w-4 h-4 text-rose-400" />
-              {isDownloaded ? 'সংরক্ষিত আছে' : isDownloading ? `ডাউনলোড হচ্ছে (${downloadProgress}%)` : 'অফলাইনে সেভ করুন'}
-            </button>
-          </div>
-
-          <div className="mt-4 p-3 rounded-xl bg-zinc-950/80 border border-zinc-800 text-[11px] text-zinc-400 text-left space-y-1.5 max-w-xs w-full">
-            <p className="font-semibold text-zinc-200 flex items-center gap-1">
-              <span>💡 দ্রুত সমাধান টিপস:</span>
-            </p>
-            <p className="text-zinc-400 leading-normal">
-              ১. <strong>১০০% ফ্রি স্থায়ী সমাধান:</strong> আপনার GitHub রিপোজিটরির <em>Releases</em> এ ভিডিও আপলোড করে লিংক দিন (সর্বোচ্চ ২ জিবি/ভিডিও, কোনো লিমিট বা রিফ্রেশ সমস্যা নেই)।
-            </p>
-            <p className="text-zinc-400 leading-normal">
-              ২. <strong>Dropbox লিংক:</strong> ড্রপবক্স ফাইলে গিয়ে <em>Share &gt; "Anyone with link can view"</em> নিশ্চিত করে লিংক কপি করুন এবং <em>"অফলাইনে সেভ করুন"</em> এ চাপুন।
-            </p>
-            <p className="text-zinc-400 leading-normal">
-              ৩. <strong>Brave ব্রাউজার:</strong> উপরে সিংহ আইকনে ট্যাপ করে <em>Brave Shields সাময়িক বন্ধ</em> করে সাইটটি রিফ্রেশ দিন।
-            </p>
           </div>
         </div>
       )}

@@ -117,6 +117,17 @@ export const FeedContainer: React.FC<FeedContainerProps> = ({
   // Auto-advance callback when video playback finishes: loops back from last video to 1st video
   const handleVideoEnded = useCallback(() => {
     if (safeVideos.length <= 0) return;
+    if (safeVideos.length === 1) {
+      // If only 1 video exists, replay it continuously from the beginning
+      const container = containerRef.current;
+      const singleVideo = container?.querySelector('video');
+      if (singleVideo) {
+        singleVideo.currentTime = 0;
+        singleVideo.play().catch(() => {});
+      }
+      return;
+    }
+
     const next = (activeIndex + 1) % safeVideos.length;
     setActiveIndex(next);
     const container = containerRef.current;
